@@ -1,0 +1,34 @@
+-- =============================================================================
+-- 900_grants_example.sql — Exemplo de usuários com privilégio mínimo (RNF-07)
+-- RASCUNHO DA FASE 0 — NÃO EXECUTAR. Ajustar nomes com o DBA.
+--
+-- OHIP_OWNER  : dono do schema (só para DDL; nenhum processo usa este usuário).
+-- OHIP_APP    : usado por consumer, publisher, enricher e API.
+-- OHIP_READ   : leitura para BI (opcional).
+-- =============================================================================
+
+-- GRANT CREATE SESSION TO ohip_app;
+-- GRANT SELECT, INSERT, UPDATE ON ohip_owner.ohip_event_raw       TO ohip_app;
+-- GRANT SELECT, INSERT, UPDATE ON ohip_owner.ohip_offset          TO ohip_app;
+-- GRANT SELECT, INSERT, UPDATE ON ohip_owner.ohip_lease           TO ohip_app;
+-- GRANT SELECT, INSERT, UPDATE ON ohip_owner.ohip_outbox          TO ohip_app;
+-- GRANT SELECT, INSERT, UPDATE ON ohip_owner.ohip_dlq             TO ohip_app;
+-- GRANT SELECT, INSERT, UPDATE ON ohip_owner.ohip_consumer_status TO ohip_app;
+-- GRANT SELECT, INSERT, UPDATE ON ohip_owner.ohip_replay_request  TO ohip_app;
+-- GRANT SELECT ON ohip_owner.ohip_event_raw_seq  TO ohip_app;
+-- GRANT SELECT ON ohip_owner.ohip_outbox_seq     TO ohip_app;
+-- GRANT SELECT ON ohip_owner.ohip_dlq_seq        TO ohip_app;
+-- GRANT SELECT ON ohip_owner.ohip_replay_req_seq TO ohip_app;
+-- Expurgo (usuário próprio): precisa ler para aplicar os filtros NOT EXISTS.
+-- GRANT CREATE SESSION TO ohip_purge;
+-- GRANT SELECT, DELETE ON ohip_owner.ohip_event_raw TO ohip_purge;
+-- GRANT SELECT, DELETE ON ohip_owner.ohip_outbox    TO ohip_purge;
+-- GRANT SELECT, DELETE ON ohip_owner.ohip_dlq       TO ohip_purge;
+--
+-- BI: NUNCA ler OHIP_EVENT_RAW direto (payload com dados pessoais).
+-- Dar acesso a uma view mascarada (definida após a Q-9) e às tabelas de domínio.
+-- GRANT CREATE SESSION TO ohip_read;
+-- GRANT SELECT ON ohip_owner.ohip_event_raw_v TO ohip_read;   -- view mascarada (a criar)
+--
+-- Sinônimos privados para OHIP_APP/OHIP_PURGE (ou ALTER SESSION SET CURRENT_SCHEMA):
+-- CREATE SYNONYM ohip_app.ohip_event_raw FOR ohip_owner.ohip_event_raw;  -- repetir por objeto

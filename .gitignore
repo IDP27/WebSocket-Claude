@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+dist/
+
+# Segredos e ambiente local
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Diversos
+.DS_Store
+*.log
+profiles/
