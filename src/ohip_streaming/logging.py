@@ -4,18 +4,28 @@
 - Contexto de correlação (``unique_event_id``, ``chain_code``, ``offset``...) via
   ``bind_context``: vale para tudo que for logado dentro do bloco, inclusive em corrotinas.
 - Logs de bibliotecas (uvicorn, websockets, aio-pika) passam pelo mesmo formatador.
-- Segredos são mascarados por nome de campo e por padrão (``Bearer ...``) antes de sair.
-  Dados pessoais do ``detail`` são mascarados no domínio (LGPD), não aqui.
+- Segredos são mascarados por nome de campo (snake, kebab ou camelCase) e por padrão no texto
+  (``Bearer ...``, senha em URL, ``?key=<hash>``, ``x-app-key: ...``) antes de sair.
+- Tracebacks **nunca** levam variáveis locais: elas podem conter o ``connection_init`` com a
+  app key, tokens ou o ``detail`` com dados pessoais, e o ``repr`` delas escapa da máscara.
+  O traceback vira dado/texto antes da máscara, que então também cobre a mensagem da exceção.
+- Dados pessoais do ``detail`` são mascarados no domínio (LGPD), não aqui.
+- Código síncrono em threads (Oracle, ADR-0003) deve rodar via ``run_in_executor`` deste
+  módulo, que leva o contexto de correlação para a thread.
 """
 
 from __future__ import annotations
 
+import asyncio
+import contextvars
+import functools
 import logging
 import re
 import sys
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
+from concurrent.futures import Executor
 from contextlib import contextmanager
-from typing import Any
+from typing import Any, ParamSpec, TypeVar
 
 import structlog
 from pydantic import SecretStr
@@ -23,27 +33,22 @@ from structlog.types import EventDict, Processor, WrappedLogger
 
 MASK = "***"
 
-# Comparação em minúsculas, com "-" tratado como "_".
-_SENSITIVE_KEYS = frozenset(
-    {
-        "authorization",
-        "token",
-        "access_token",
-        "refresh_token",
-        "id_token",
-        "client_secret",
-        "app_key",
-        "x_app_key",
-        "password",
-        "passwd",
-        "secret",
-        "api_key",
-        "service_token",
-        "integration_password",
-    }
+# Nomes de campo comparados só com letras e dígitos minúsculos: "clientSecret", "client_secret"
+# e "client-secret" viram "clientsecret". Sensível = nome exato ou terminação abaixo
+# (ex.: "accessToken", mas não "token_expires_at").
+_SENSITIVE_NAMES = frozenset({"authorization", "cookie", "setcookie"})
+_SENSITIVE_SUFFIXES = ("secret", "password", "passwd", "token", "appkey", "apikey")
+_NON_ALNUM_RE = re.compile(r"[^a-z0-9]")
+
+_TEXT_PATTERNS = (
+    (re.compile(r"(?i)\bbearer\s+[A-Za-z0-9\-._~+/]+=*"), f"Bearer {MASK}"),
+    (re.compile(r"(?i)\b([a-z][a-z0-9+.-]*://)([^/\s:@]*):([^/\s@]+)@"), rf"\1\2:{MASK}@"),
+    # Hash SHA-256 da app key (o guia manda proteger também o hash): em qualquer texto, inclusive
+    # quando vem sozinho num dict de parâmetros ({"key": "<sha256>"}). O serviço não loga outros
+    # hashes de 64 hex; uniqueEventId é UUID e não casa.
+    (re.compile(r"(?i)(?<![0-9a-f])[0-9a-f]{64}(?![0-9a-f])"), MASK),
+    (re.compile(r"(?i)(x-app-key[\"']?\s*[:=]\s*[\"']?)[^\s\"',}]+"), rf"\g<1>{MASK}"),
 )
-_BEARER_RE = re.compile(r"(?i)\bbearer\s+[A-Za-z0-9\-._~+/]+=*")
-_URL_CREDENTIALS_RE = re.compile(r"(?i)\b([a-z][a-z0-9+.-]*://)([^/\s:@]*):([^/\s@]+)@")
 
 _LIBRARY_LOGGERS = (
     "uvicorn",
@@ -56,12 +61,14 @@ _LIBRARY_LOGGERS = (
 
 
 def _is_sensitive(key: str) -> bool:
-    return key.lower().replace("-", "_") in _SENSITIVE_KEYS
+    name = _NON_ALNUM_RE.sub("", key.lower())
+    return name in _SENSITIVE_NAMES or name.endswith(_SENSITIVE_SUFFIXES)
 
 
 def _redact_text(text: str) -> str:
-    text = _BEARER_RE.sub(f"Bearer {MASK}", text)
-    return _URL_CREDENTIALS_RE.sub(rf"\1\2:{MASK}@", text)
+    for pattern, replacement in _TEXT_PATTERNS:
+        text = pattern.sub(replacement, text)
+    return text
 
 
 def redact(value: Any) -> Any:
@@ -101,7 +108,12 @@ def configure_logging(
     level: str = "INFO",
     json_output: bool = True,
 ) -> None:
-    """Configura structlog e o logging padrão. Chamar uma vez, no início do entrypoint."""
+    """Configura structlog e o logging padrão. Chamar uma vez, no início do entrypoint.
+
+    A saída legível (``json_output=False``) só é aceita em desenvolvimento.
+    """
+    if not json_output and environment != "desenvolvimento":
+        raise ValueError("LOG_JSON_OUTPUT=false só é permitido em APP_ENVIRONMENT=desenvolvimento")
     shared: list[Processor] = [
         structlog.contextvars.merge_contextvars,
         structlog.stdlib.add_logger_name,
@@ -112,11 +124,20 @@ def configure_logging(
     ]
     renderer: Processor
     if json_output:
-        shared.append(structlog.processors.dict_tracebacks)
+        # show_locals=False: o padrão do structlog serializa as variáveis locais de cada frame.
+        shared.append(
+            structlog.processors.ExceptionRenderer(
+                structlog.tracebacks.ExceptionDictTransformer(show_locals=False, use_rich=False)
+            )
+        )
         renderer = structlog.processors.JSONRenderer()
     else:
-        renderer = structlog.dev.ConsoleRenderer(colors=False)
-    # A máscara roda por último, depois de os tracebacks virarem dados.
+        # Traceback em texto simples (sem locais) antes da máscara; o renderer só imprime.
+        shared.append(structlog.processors.format_exc_info)
+        renderer = structlog.dev.ConsoleRenderer(
+            colors=False, exception_formatter=structlog.dev.plain_traceback
+        )
+    # A máscara roda por último, depois de os tracebacks virarem dados ou texto.
     shared.append(_redact_processor)
 
     structlog.configure(
@@ -151,3 +172,20 @@ def bind_context(**fields: Any) -> Iterator[None]:
     """Adiciona campos de correlação a todos os logs do bloco (seguro com asyncio)."""
     with structlog.contextvars.bound_contextvars(**fields):
         yield
+
+
+P = ParamSpec("P")
+R = TypeVar("R")
+
+
+async def run_in_executor(
+    executor: Executor | None, func: Callable[P, R], *args: P.args, **kwargs: P.kwargs
+) -> R:
+    """Como ``loop.run_in_executor``, mas levando o contexto de correlação para a thread.
+
+    ``loop.run_in_executor`` não copia contextvars; sem isso, os logs do adapter Oracle
+    perderiam ``unique_event_id``/``chain_code`` (RF-13).
+    """
+    context = contextvars.copy_context()
+    call = functools.partial(context.run, func, *args, **kwargs)
+    return await asyncio.get_running_loop().run_in_executor(executor, call)

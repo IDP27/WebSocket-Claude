@@ -9,7 +9,7 @@
 | 1. Esqueleto ✅ em revisão | Poetry, `config.py` (pydantic-settings), logging JSON, ruff/mypy/pytest/import-linter, `.env.example`, `Makefile` | P | 0 | — |
 | 2. Domain e application | `Event`, `Offset`, `ChainCode`, routing key, máscara LGPD, política de fechamento/backoff; ports; casos de uso com fakes | M | 1 | — |
 | 3. Adapter Oracle | Pool Thick, `EventStore` (lote + epoch + dedup + outbox), repositórios de status/DLQ/replay; testes `@pytest.mark.oracle` | G | 2 | Oracle 11g de teste + Instant Client 19 |
-| 4. Auth, lease e Redis | `TokenProvider` (OAuth, cache, margem), `Lease` no Oracle (ADR-0008), caches e métricas no Redis | M | 2, 3 | Q-10, Q-12, DV-12 |
+| 4. Auth, lease e Redis (+ `LeaseSettings` comum, ADR-0010) | `TokenProvider` (OAuth, cache, margem), `Lease` no Oracle (ADR-0008), caches e métricas no Redis | M | 2, 3 | Q-10, Q-12, DV-12 |
 | 5. Consumer WebSocket | Protocolo, heartbeat dinâmico, máquina de estados, códigos, replay, shutdown; `fake_ohip_server.py` e cenários | G | 3, 4 | Sandbox OHIP para validar D-1, D-4, D-7 (não bloqueia o código) |
 | 6. Publisher outbox | Lotes por chain, publisher confirms, backoff com cabeça da fila, DLQ; testes de contrato | M | 3 | RabbitMQ de teste; Q-13 |
 | 7. API FastAPI | Endpoints, perfis, auditoria, OpenAPI, `/metrics` | M | 3 | — |

@@ -103,8 +103,8 @@ class OhipSettings(BaseSettings):
     # --- protocolo (ADR-0007)
     ping_interval_s: float = Field(default=15.0, gt=0, le=15)
     ack_timeout_s: float = Field(default=10.0, gt=0, le=60)
-    pong_timeout_min_s: float = Field(default=180.0, ge=60)
-    token_refresh_margin_s: int = Field(default=300, ge=60)
+    pong_timeout_min_s: float = Field(default=180.0, ge=180)  # max(180 s, 4 x SRTT), ADR-0007
+    token_refresh_margin_s: int = Field(default=300, ge=60, le=1800)  # token vale 60 min
     reconnect_min_gap_s: float = Field(default=10.0, ge=10)
     lockout_4409_s: float = Field(default=120.0, ge=120)
     backoff_4504_s: float = Field(default=15.0, ge=15)
@@ -258,7 +258,8 @@ class ConsumerSettings(BaseSettings):
 
     intake_queue_max: int = Field(default=5_000, ge=1)
     intake_queue_max_bytes: int = Field(default=64 * MIB, ge=1 * MIB)
-    intake_stall_timeout_s: float = Field(default=120.0, gt=0)
+    # < 180 s: o servidor fecha a conexão se não vir pong em 180 s (ARCHITECTURE §4.1).
+    intake_stall_timeout_s: float = Field(default=120.0, gt=0, lt=180)
     batch_max_events: int = Field(default=200, ge=1)
     batch_max_wait_ms: int = Field(default=200, ge=1)
     batch_max_retries: int = Field(default=5, ge=0)
@@ -297,7 +298,12 @@ class LogSettings(BaseSettings):
     model_config = _config("LOG_")
 
     level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
-    json_output: bool = True  # False: saída legível para desenvolvimento
+    json_output: bool = True  # False: saída legível, só em desenvolvimento
+
+    @field_validator("level", mode="before")
+    @classmethod
+    def _upper_level(cls, value: object) -> object:
+        return value.strip().upper() if isinstance(value, str) else value
 
 
 SettingsT = TypeVar("SettingsT", bound=BaseSettings)

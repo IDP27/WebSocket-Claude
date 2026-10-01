@@ -71,7 +71,7 @@ known-first-party = ["ohip_streaming"]
 python_version = "3.11"
 strict = true
 mypy_path = "src"
-packages = ["ohip_streaming"]
+files = ["src", "tests"]
 plugins = ["pydantic.mypy"]
 warn_unreachable = true
 

@@ -30,6 +30,10 @@ forbidden_modules =
     httpx
     uvicorn
     gunicorn
+    starlette
+    werkzeug
+    jinja2
+    aiormq
     pydantic_settings
     ohip_streaming.config
 
@@ -53,6 +57,8 @@ forbidden_modules =
     ohip_streaming.adapters.redis
     oracledb
     redis
+    ; o painel terá configuração própria (URL da API e tokens) e nunca carrega OracleSettings
+    ohip_streaming.config
 
 [importlinter:contract:api-e-painel-independentes]
 name = API e painel não importam um ao outro

@@ -142,6 +142,8 @@ def test_ohip_module_codes_are_case_insensitive(monkeypatch: pytest.MonkeyPatch)
         ("OHIP_OAUTH_TOKEN_PATH", "oauth/v1/tokens"),
         # Limites do protocolo (ADR-0007): valores que provocariam 4408/4409.
         ("OHIP_PING_INTERVAL_S", "20"),
+        ("OHIP_PONG_TIMEOUT_MIN_S", "120"),
+        ("OHIP_TOKEN_REFRESH_MARGIN_S", "3600"),
         ("OHIP_RECONNECT_MIN_GAP_S", "5"),
         ("OHIP_LOCKOUT_4409_S", "60"),
         ("OHIP_BACKOFF_INITIAL_S", "1"),
@@ -152,7 +154,8 @@ def test_ohip_module_codes_are_case_insensitive(monkeypatch: pytest.MonkeyPatch)
 def test_ohip_rejects_invalid_values(
     monkeypatch: pytest.MonkeyPatch, variable: str, value: str
 ) -> None:
-    with pytest.raises(ValidationError):
+    field = variable.removeprefix("OHIP_").lower()
+    with pytest.raises(ValidationError, match=field):
         ohip(monkeypatch, **{variable: value})
 
 
@@ -228,6 +231,12 @@ def test_redis_settings(monkeypatch: pytest.MonkeyPatch) -> None:
         RedisSettings()
 
 
+def test_consumer_stall_timeout_below_server_pong_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CONSUMER_INTAKE_STALL_TIMEOUT_S", "180")
+    with pytest.raises(ValidationError, match="intake_stall_timeout_s"):
+        ConsumerSettings()
+
+
 def test_consumer_lease_renewal_must_fit_twice_in_ttl(monkeypatch: pytest.MonkeyPatch) -> None:
     assert ConsumerSettings().lease_ttl_s == 30
 
@@ -254,6 +263,11 @@ def test_log_settings_defaults() -> None:
     settings = LogSettings()
     assert settings.level == "INFO"
     assert settings.json_output is True
+
+
+def test_log_level_is_case_insensitive(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LOG_LEVEL", " warning ")
+    assert LogSettings().level == "WARNING"
 
 
 def test_load_settings_is_cached_per_class(monkeypatch: pytest.MonkeyPatch) -> None:

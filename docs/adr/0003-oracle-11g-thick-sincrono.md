@@ -12,7 +12,7 @@ O banco confirmado é Oracle 11g. O modo Thin do `python-oracledb` só conecta a
 - `oracledb.init_oracle_client(lib_dir=ORACLE_CLIENT_LIB_DIR)` com Oracle Instant Client 19 na VM.
 - Acesso síncrono:
   - **consumer**: um `ThreadPoolExecutor(max_workers=1)` com uma conexão dedicada para as escritas (um único thread preserva a ordem das transações da chain) e uma segunda conexão de controle, em outro thread, para lease, status e pedidos de replay (ADR-0008).
-  - **publisher/enricher**: executor pequeno com pool de conexões; chamadas via `loop.run_in_executor`.
+  - **publisher/enricher**: executor pequeno com pool de conexões; chamadas via `ohip_streaming.logging.run_in_executor`, que leva o contexto de correlação para a thread (`loop.run_in_executor` puro o perderia — ADR-0010). O mesmo vale para o executor do consumer.
   - **API**: rotas que tocam o Oracle são `def` (threadpool do FastAPI), pool de sessão do driver.
 - IDs por sequence explícita no `INSERT`; lotes reservam ids com `CONNECT BY LEVEL`.
 - Paginação por chave com `ROWNUM`; JSON em `CLOB` com `setinputsizes`.
