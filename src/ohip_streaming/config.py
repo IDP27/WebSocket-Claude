@@ -23,12 +23,15 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
+from ohip_streaming.domain.errors import InvalidIdentifierError
+from ohip_streaming.domain.identifiers import (
+    normalize_event_name,
+    validate_chain_code,
+    validate_hotel_codes,
+)
+
 MIB = 1024 * 1024
 
-# Padrões do schema GraphQL oficial do OHIP (StreamingGraphQLSchema.json).
-_CHAIN_CODE_RE = re.compile(r"^[A-Za-z0-9 _%#$&-]{1,20}$")
-_HOTEL_CODE_RE = re.compile(r"^[A-Za-z0-9 _%#$&-]+$")
-_HOTEL_CODES_MAX_LEN = 50  # hotelCode é StringWithLength50 (lista separada por vírgula, D-9)
 _SHA256_HEX_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -136,9 +139,10 @@ class OhipSettings(BaseSettings):
     @field_validator("chain_code")
     @classmethod
     def _validate_chain_code(cls, value: str) -> str:
-        if not _CHAIN_CODE_RE.fullmatch(value):
-            raise ValueError("chain_code fora do padrão do OHIP (^[A-Za-z0-9 _%#$&-]{1,20}$)")
-        return value
+        try:
+            return validate_chain_code(value)
+        except InvalidIdentifierError as exc:
+            raise ValueError(str(exc)) from exc
 
     @field_validator("hotel_codes", "event_allowlist", mode="before")
     @classmethod
@@ -148,18 +152,15 @@ class OhipSettings(BaseSettings):
     @field_validator("hotel_codes")
     @classmethod
     def _validate_hotel_codes(cls, value: list[str]) -> list[str]:
-        for code in value:
-            if not _HOTEL_CODE_RE.fullmatch(code):
-                raise ValueError(f"hotel_code inválido: {code!r}")
-        if len(",".join(value)) > _HOTEL_CODES_MAX_LEN:
-            raise ValueError(f"hotel_codes excede {_HOTEL_CODES_MAX_LEN} caracteres no total")
-        return value
+        try:
+            return validate_hotel_codes(value)
+        except InvalidIdentifierError as exc:
+            raise ValueError(str(exc)) from exc
 
     @field_validator("event_allowlist")
     @classmethod
     def _normalize_events(cls, value: list[str]) -> list[str]:
-        # eventName chega em maiúsculas com espaços (ex.: "UPDATE RESERVATION").
-        return [" ".join(name.split()).upper() for name in value]
+        return [normalize_event_name(name) for name in value]
 
     @field_validator("module_codes")
     @classmethod

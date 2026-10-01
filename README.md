@@ -2,7 +2,7 @@
 
 Consumidor de eventos do OPERA Cloud pela **OHIP Streaming API** (WebSocket + GraphQL). Grava cada evento no Oracle 11g sem perda nem duplicidade e publica no RabbitMQ via outbox para BI, integrações e n8n.
 
-> **Status: Fase 1 (esqueleto) em revisão.** Veja [docs/PLAN.md](docs/PLAN.md).
+> **Status: Fase 2 (domain e application) em revisão.** Veja [docs/PLAN.md](docs/PLAN.md).
 
 ## Ambiente de desenvolvimento
 

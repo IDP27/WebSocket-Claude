@@ -106,7 +106,9 @@ Resposta `202`:
 | `PUBLISH` | Cria uma **linha nova** na outbox (cópia da mensagem, no fim da fila da chain). A linha antiga continua `FAILED`. |
 | `NORMALIZE` / `ENRICH` | Insere na outbox uma mensagem para o exchange `ohip.reprocess`. |
 
-Marca o item com `resolution=RETRIED`, `resolved_by=X-Actor`.
+`PUBLISH`, `NORMALIZE` e `ENRICH` marcam o item com `resolution=RETRIED`, `resolved_by=X-Actor` **na mesma transação** da linha nova na outbox, condicionada a `resolution IS NULL`: dois cliques não duplicam a mensagem (o segundo recebe 409). No `CONSUME`, quem resolve é o consumer depois de gravar; se a mensagem continuar inválida, o item fica aberto com o motivo novo e o retry pode ser pedido de novo.
+
+`POST /events/{id}/reprocess` e o retry de `NORMALIZE`/`ENRICH` recusam evento `IGNORED` (fora da allowlist, DV-13) com 409.
 
 ## Códigos de erro
 
@@ -118,5 +120,6 @@ Marca o item com `resolution=RETRIED`, `resolved_by=X-Actor`.
 | 404 | `NOT_FOUND` | Evento, item de DLQ ou chain inexistente |
 | 409 | `REPLAY_ALREADY_PENDING` | Já há replay pendente na chain |
 | 409 | `REPLAY_NOT_PENDING` | Cancelamento de pedido que não está `PENDING` |
+| 409 | `INVALID_STATE` | Item de DLQ já resolvido ou com retry já pedido; item sem a referência necessária; evento `IGNORED` |
 | 422 | `REPLAY_FORWARD_NOT_ALLOWED` | `from_offset` maior que o último offset confirmado |
 | 503 | `DEPENDENCY_UNAVAILABLE` | Oracle indisponível |

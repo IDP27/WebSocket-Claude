@@ -37,6 +37,7 @@
 | D-7 | O `offset` chega como string ou número no `next`? (exemplos divergem) | Ambíguo | Aceita os dois, normaliza para string (ADR-0006) |
 | D-8 | Tamanho máximo esperado de uma mensagem `next` (para `max_size` do `websockets`) | Não documentado | `WS_MAX_MESSAGE_BYTES` configurável, padrão 16 MiB; excedente → reconexão; repetido 3× no mesmo offset → `STOPPED` + alerta |
 | D-9 | `hotelCode` aceita lista separada por vírgula? (o schema diz que sim; o guia mostra só um código) | Ambíguo | Config `OHIP_HOTEL_CODES` como lista; validar com 2 hotéis no sandbox |
+| D-10 | Quais `error` o OHIP envia na assinatura (ex.: offset fora da retenção de 7 dias, `chainCode`/`hotelCode` inválido) e se algum deles exige parar em vez de reconectar | O guia não lista os erros do frame `error` | `error`/`complete` com o nosso `id` encerram a assinatura e disparam reconexão com backoff exponencial (ARCHITECTURE §3, §4.1); motivo logado. Validar no sandbox na Fase 5 e, se houver erro permanente, tratá-lo como 4403 (`STOPPED` + alerta) |
 
 ## DV — Divergências entre o PRD e a documentação
 

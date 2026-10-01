@@ -56,6 +56,7 @@ select = [
     "RUF",      # regras do ruff
     "DTZ",      # datetimes sem fuso
     "ASYNC",    # armadilhas de asyncio
+    "BLE",      # except Exception só com justificativa
     "PT",       # pytest
     "N",        # nomes
 ]
@@ -83,7 +84,7 @@ disallow_untyped_defs = false
 [tool.pytest.ini_options]
 minversion = "9.0"
 testpaths = ["tests"]
-pythonpath = ["src"]
+pythonpath = ["src", "."]
 asyncio_mode = "auto"
 addopts = ["--strict-markers", "--strict-config", "-ra"]
 markers = [
