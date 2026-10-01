@@ -2,7 +2,9 @@
 
 Consumidor de eventos do OPERA Cloud pela **OHIP Streaming API** (WebSocket + GraphQL). Grava cada evento no Oracle 11g sem perda nem duplicidade e publica no RabbitMQ via outbox para BI, integrações e n8n.
 
-> **Status: Fase 2 (domain e application) em revisão.** Veja [docs/PLAN.md](docs/PLAN.md).
+> **Status: Fases 0 a 3 concluídas** (concepção, esqueleto, domínio e casos de uso, adapter Oracle). Próxima: Fase 4 (token OAuth, lease e Redis). A validação do adapter num Oracle 11g real aguarda ambiente (Q-17). Veja [docs/PLAN.md](docs/PLAN.md).
+>
+> **Endpoints**: a API de controle (FastAPI, [docs/API.md](docs/API.md)) e o painel são as Fases 7 e 8 e ainda não existem em código. As APIs da Oracle que o projeto chama estão em [postman/](postman/README.md).
 
 ## Ambiente de desenvolvimento
 
@@ -14,7 +16,16 @@ cp .env.example .env    # preencha; o .env não é versionado
 make check              # ruff + mypy + import-linter + pytest com cobertura
 ```
 
-Outros alvos: `make help`. Testes que precisam de Oracle/RabbitMQ/Redis: `make test-integration`.
+Outros alvos: `make help`. Testes que precisam de Oracle/RabbitMQ/Redis: `make test-integration`. Sem Poetry instalado, os alvos usam as ferramentas da `.venv` já criada.
+
+### VS Code
+
+Abra `ohip-streaming.code-workspace` e instale as extensões recomendadas (aviso no canto da tela).
+
+- **Terminal → Run Task**: `make check` (também em Cmd+Shift+B), testes, lint, mypy, camadas, integração com Oracle de teste, integridade das specs da Oracle e cobertura em HTML.
+- **Testing** (ícone de frasco): a suíte sem infraestrutura. Os testes de Oracle real aparecem como pulados até existir schema de teste.
+- **Run and Debug**: `pytest: arquivo atual` e `pytest: suíte sem infraestrutura`.
+- **APIs da Oracle**: a extensão Postman importa `postman/ohip-streaming.postman_collection.json` e o environment-modelo (só sandbox; veja [postman/README.md](postman/README.md)).
 
 **macOS — "No module named ohip_streaming" fora da raiz:** se o arquivo `.venv/lib/python3.*/site-packages/ohip_streaming.pth` ganhar a flag `hidden`, o Python 3.12+ o ignora. Corrija com `chflags nohidden .venv/lib/python3.*/site-packages/*.pth`. O `Makefile` já define `PYTHONPATH=src` para não depender disso.
 

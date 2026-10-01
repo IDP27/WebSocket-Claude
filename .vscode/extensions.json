@@ -2,9 +2,13 @@
   "recommendations": [
     "ms-python.python",
     "ms-python.vscode-pylance",
+    "ms-python.debugpy",
     "charliermarsh.ruff",
     "ms-python.mypy-type-checker",
+    "tamasfe.even-better-toml",
     "samuelcolvin.jinjahtml",
-    "Oracle.sql-developer"
+    "Oracle.sql-developer",
+    // Importa postman/ohip-streaming.postman_collection.json (APIs da Oracle) dentro do VS Code
+    "Postman.postman-for-vscode"
   ]
 }

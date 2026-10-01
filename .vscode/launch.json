@@ -1,0 +1,26 @@
+{
+  // Depuração. Os entrypoints (consumer, publisher, API, painel) entram aqui nas Fases 5 a 8.
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "pytest: arquivo atual",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "pytest",
+      "args": ["${file}", "-x", "-q", "-p", "no:cacheprovider"],
+      "envFile": "${workspaceFolder}/.vscode/test.env",
+      "cwd": "${workspaceFolder}",
+      "justMyCode": false
+    },
+    {
+      "name": "pytest: suíte sem infraestrutura",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "pytest",
+      "args": ["-m", "not oracle and not rabbitmq and not redis and not load", "-x", "-q"],
+      "envFile": "${workspaceFolder}/.vscode/test.env",
+      "cwd": "${workspaceFolder}",
+      "justMyCode": false
+    }
+  ]
+}

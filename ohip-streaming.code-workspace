@@ -2,5 +2,6 @@
   "folders": [
     { "name": "ohip-streaming", "path": "." }
   ],
+  // Configurações, tarefas e depuração ficam em .vscode/ (valem com ou sem o workspace).
   "settings": {}
 }

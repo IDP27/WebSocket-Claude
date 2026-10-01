@@ -1,0 +1,44 @@
+{
+  // Terminal → Run Task (ou Cmd+Shift+B para o "make check").
+  // Os alvos usam Poetry se estiver instalado; senão, as ferramentas da .venv (Makefile).
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "make check (Definição de Pronto)",
+      "type": "shell",
+      "command": "make check",
+      "group": { "kind": "build", "isDefault": true },
+      "problemMatcher": []
+    },
+    {
+      "label": "make test (cobertura)",
+      "type": "shell",
+      "command": "make test",
+      "group": { "kind": "test", "isDefault": true },
+      "problemMatcher": []
+    },
+    { "label": "make lint", "type": "shell", "command": "make lint", "problemMatcher": [] },
+    { "label": "make format", "type": "shell", "command": "make format", "problemMatcher": [] },
+    { "label": "make typecheck (mypy)", "type": "shell", "command": "make typecheck", "problemMatcher": [] },
+    { "label": "make imports (camadas)", "type": "shell", "command": "make imports", "problemMatcher": [] },
+    {
+      "label": "make test-integration (Oracle de teste)",
+      "detail": "Precisa de TEST_ORACLE_* e TEST_ORACLE_DISPOSABLE_SCHEMA=sim (RUNBOOK). Nunca homologação/produção.",
+      "type": "shell",
+      "command": "make test-integration",
+      "problemMatcher": []
+    },
+    {
+      "label": "Specs da Oracle: conferir integridade",
+      "type": "shell",
+      "command": "make oracle-docs",
+      "problemMatcher": []
+    },
+    {
+      "label": "Cobertura em HTML (htmlcov/)",
+      "type": "shell",
+      "command": "PYTHONPATH=src .venv/bin/pytest -m 'not oracle and not rabbitmq and not redis and not load' --cov --cov-report=html -q && open htmlcov/index.html",
+      "problemMatcher": []
+    }
+  ]
+}

@@ -1,16 +1,22 @@
-# Atalhos de qualidade. Requer Poetry (https://python-poetry.org) no PATH.
-# `make check` é o que o engenheiro roda antes de entregar (Definição de Pronto).
+# Atalhos de qualidade. `make check` é o que o engenheiro roda antes de entregar
+# (Definição de Pronto). Com Poetry no PATH, usa `poetry run`; sem Poetry, usa direto as
+# ferramentas da .venv do projeto (criada por `make install` numa máquina com Poetry).
 
-POETRY ?= poetry
+POETRY ?= $(shell command -v poetry 2>/dev/null)
+ifneq ($(strip $(POETRY)),)
 RUN := PYTHONPATH=src $(POETRY) run
+else
+RUN := PYTHONPATH=src PATH="$(CURDIR)/.venv/bin:$$PATH"
+endif
 UNIT_MARKERS := not oracle and not rabbitmq and not redis and not load
 
-.PHONY: help install lint format typecheck imports test test-integration check clean
+.PHONY: help install lint format typecheck imports test test-integration oracle-docs check clean
 
 help:  ## Lista os alvos
 	@grep -E '^[a-z-]+:.*##' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-18s %s\n", $$1, $$2}'
 
-install:  ## Cria .venv e instala dependências travadas
+install:  ## Cria .venv e instala dependências travadas (requer Poetry)
+	@test -n "$(POETRY)" || { echo "Poetry não encontrado: https://python-poetry.org"; exit 1; }
 	$(POETRY) install
 
 lint:  ## ruff (lint + formatação, sem alterar)
@@ -32,6 +38,9 @@ test:  ## Testes sem infraestrutura, com cobertura
 
 test-integration:  ## Testes que precisam de Oracle/RabbitMQ/Redis de teste
 	$(RUN) pytest -m "oracle or rabbitmq or redis"
+
+oracle-docs:  ## Confere a integridade das specs oficiais da Oracle em vendor/ (ADR-0012)
+	scripts/sync_oracle_api_docs.sh --check
 
 check: lint typecheck imports test  ## Tudo o que a Definição de Pronto exige
 
