@@ -205,6 +205,10 @@ class OracleSettings(BaseSettings):
     client_lib_dir: Path | None = None  # None: Instant Client pelo caminho padrão do sistema
     pool_min: int = Field(default=1, ge=1)
     pool_max: int = Field(default=4, ge=1)
+    # Espera máxima por uma conexão livre do pool e por uma chamada ao banco. Estourou →
+    # "banco indisponível" (a conexão é descartada). 0 desliga o limite da chamada.
+    pool_wait_timeout_ms: int = Field(default=10_000, ge=100)
+    call_timeout_ms: int = Field(default=60_000, ge=0)
 
     @model_validator(mode="after")
     def _validate_pool(self) -> Self:

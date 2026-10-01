@@ -287,9 +287,10 @@ entrypoints ──▶ application ──▶ domain
 ```
 
 - `domain/` (Fase 2, ADR-0011): `offset.py` (`Offset`), `identifiers.py` (padrões do OHIP e limites da DDL), `events.py` (`Event`, parser do frame `next`, `RejectedMessage`), `masking.py` (LGPD e cartão), `messages.py` (routing key e contrato v1), `connection.py` (códigos de fechamento, backoff, regra dos 10 s, heartbeat, token), `rules.py` (offset do lote, allowlist, backoff de publicação, replay).
-- `application/ports.py`: `Clock`, `MetricsSink`, `SeenCache`, `EventStore`, `OutboxStore`, `MessagePublisher`, `ReplayStore`, `OperationsStore`, `QueueDedup`, `EnrichmentStore`, `ResourceFetcher`, `NormalizationRule`. Ports de token, lease e WebSocket entram nas Fases 4 e 5.
+- `application/ports.py`: `Clock`, `MetricsSink`, `SeenCache`, `EventStore`, `ConsumerStatusStore` (Fase 3), `OutboxStore`, `MessagePublisher`, `ReplayStore`, `OperationsStore`, `QueueDedup`, `EnrichmentStore`, `ResourceFetcher`, `NormalizationRule`. Ports de token, lease e WebSocket entram nas Fases 4 e 5.
 - `application/use_cases/`: `ProcessEventBatch`, `PublishOutbox`, `RequestReplay`, `ApplyReplay`, `CancelReplay`, `ReprocessEvent`, `RetryDlqItem`, `RetryConsumeDlq`, `EnrichEvent` (+ `RuleRegistry`).
-- `adapters/`: `ohip_ws`, `ohip_rest`, `oracle`, `redis`, `rabbitmq`.
+- `adapters/oracle/` (Fase 3, ADR-0013): `database.py` (pool Thick, `DedicatedSession` para a escrita do consumer, `PooledSession`, transação e barreira), `errors.py` (indisponível × duplicado × falha), `event_store.py`, `outbox_store.py`, `replay_store.py`, `operations_store.py`, `status_store.py`. Lease (Fase 4) e `EnrichmentStore` (Fase 9) ainda não.
+- Demais `adapters/`: `ohip_ws`, `ohip_rest`, `redis`, `rabbitmq`.
 - `entrypoints/`: `consumer.py`, `publisher.py`, `enricher.py`, `api/`, `admin/`.
 
 `import-linter` (ADR-0005): `domain`/`application` sem `oracledb`, `websockets`, `fastapi`, `flask`, `aio_pika`, `redis`, `httpx`; `entrypoints.admin` sem `adapters.oracle`, `adapters.redis`, `oracledb`, `redis`.

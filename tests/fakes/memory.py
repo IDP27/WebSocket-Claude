@@ -22,6 +22,7 @@ from ohip_streaming.application.ports import (
     BatchResult,
     BatchToPersist,
     ConsumeRetryItem,
+    DisconnectSnapshot,
     DlqItem,
     DlqStage,
     DomainWrite,
@@ -34,6 +35,7 @@ from ohip_streaming.application.ports import (
     RowFailure,
     StoredEvent,
 )
+from ohip_streaming.domain.connection import ConsumerState
 from ohip_streaming.domain.events import Event
 from ohip_streaming.domain.messages import ExchangeKind, QueueMessage
 from ohip_streaming.domain.offset import Offset
@@ -195,6 +197,11 @@ class InMemoryDatabase:
     outbox: dict[int, OutboxRecord] = field(default_factory=dict)
     dlq: dict[int, DlqRecord] = field(default_factory=dict)
     replays: dict[int, ReplayRequest] = field(default_factory=dict)
+    cancelled_by: dict[int, str] = field(default_factory=dict)
+    # chain → (estado, instance_id, last_disconnect_at, último código de fechamento)
+    statuses: dict[str, tuple[ConsumerState, str | None, datetime | None, int | None]] = field(
+        default_factory=dict
+    )
     domain_tables: dict[tuple[str, tuple[Any, ...]], tuple[dict[str, Any], int]] = field(
         default_factory=dict
     )
@@ -212,6 +219,7 @@ class InMemoryDatabase:
     def provision_chain(self, chain_code: str) -> None:
         self.offsets.setdefault(chain_code, OffsetState())
         self.leases.setdefault(f"consumer:{chain_code}", 0)
+        self.statuses.setdefault(chain_code, (ConsumerState.STOPPED, None, None, None))
 
     def acquire(self, lease_name: str) -> int:
         self.leases[lease_name] = self.leases.get(lease_name, 0) + 1
@@ -479,7 +487,35 @@ class InMemoryDatabase:
         if current is None or current.status is not ReplayStatus.PENDING:
             return False
         self.replays[request_id] = replace(current, status=ReplayStatus.CANCELLED)
+        self.cancelled_by[request_id] = cancelled_by
         return True
+
+    # ----------------------------------------------------------- ConsumerStatusStore
+
+    def _status(
+        self, chain_code: str
+    ) -> tuple[ConsumerState, str | None, datetime | None, int | None]:
+        if chain_code not in self.statuses:
+            raise UnknownChainError(chain_code)
+        return self.statuses[chain_code]
+
+    async def record_state(self, chain_code: str, state: ConsumerState, instance_id: str) -> None:
+        _, _, disconnected_at, code = self._status(chain_code)
+        self.statuses[chain_code] = (state, instance_id, disconnected_at, code)
+
+    async def record_disconnect(
+        self,
+        chain_code: str,
+        state: ConsumerState,
+        close_code: int | None,
+        close_reason: str | None,
+    ) -> None:
+        _, instance_id, _, _ = self._status(chain_code)
+        self.statuses[chain_code] = (state, instance_id, self.clock.now(), close_code)
+
+    async def disconnect_snapshot(self, chain_code: str) -> DisconnectSnapshot:
+        state, _, disconnected_at, _ = self._status(chain_code)
+        return DisconnectSnapshot(self.clock.now(), disconnected_at, state)
 
     # ----------------------------------------------------------- OperationsStore / Enrichment
 

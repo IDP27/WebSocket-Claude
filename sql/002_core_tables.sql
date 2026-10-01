@@ -181,6 +181,8 @@ CREATE TABLE ohip_replay_request (
     error_message       VARCHAR2(1000),
     created_at          TIMESTAMP(6)    DEFAULT SYS_EXTRACT_UTC(SYSTIMESTAMP) NOT NULL,
     applied_at          TIMESTAMP(6),
+    cancelled_at        TIMESTAMP(6),
+    cancelled_by        VARCHAR2(100),                      -- auditoria do cancelamento (Fase 3)
     CONSTRAINT ohip_replay_request_pk PRIMARY KEY (id),
     CONSTRAINT ohip_replay_ck_status CHECK (status IN ('PENDING', 'APPLIED', 'REJECTED', 'CANCELLED'))
 );

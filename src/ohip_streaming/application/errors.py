@@ -26,6 +26,13 @@ class BatchFailedError(ApplicationError):
     code = "BATCH_FAILED"
 
 
+class StoreOperationError(ApplicationError):
+    """O banco respondeu e recusou uma operação que não é o lote do consumer (ex.: marcação da
+    outbox, pedido de replay). Nada foi gravado."""
+
+    code = "STORE_ERROR"
+
+
 class BrokerUnavailableError(ApplicationError):
     """Conexão com o broker perdida (broker fora, rede). Nunca conta tentativa (ADR-0002)."""
 

@@ -12,6 +12,21 @@
 6. Oracle Instant Client 19 instalado; schema e usuários conforme `sql/` (aplicado pelo DBA).
 7. RabbitMQ e Redis acessíveis pela VM.
 
+## Testes contra o Oracle de teste (Fase 3)
+
+Os cenários de `tests/stores/` rodam no fake e, com estas variáveis, num Oracle 11g **de teste**:
+
+1. O DBA cria um schema **descartável** e aplica `sql/001` a `003` (o `publisher` precisa existir em `OHIP_LEASE`). Os testes não rodam DDL; eles apagam e semeiam só as linhas das chains `ZZT1`/`ZZT2`.
+2. Numa máquina x86_64 com Instant Client 19 (não existe para Mac arm64):
+
+   ```bash
+   export TEST_ORACLE_DSN=host:1521/servico TEST_ORACLE_USER=ohip_test TEST_ORACLE_PASSWORD='***'
+   export TEST_ORACLE_CLIENT_LIB_DIR=/opt/oracle/instantclient_19_x TEST_ORACLE_DISPOSABLE_SCHEMA=sim
+   make test-integration
+   ```
+
+   Sem `TEST_ORACLE_DISPOSABLE_SCHEMA=sim` os testes de Oracle são pulados. **Nunca** aponte para homologação ou produção.
+
 ## Hash da app key
 
 ```bash

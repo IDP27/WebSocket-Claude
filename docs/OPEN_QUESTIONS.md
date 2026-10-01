@@ -23,6 +23,7 @@
 | Q-14 | É necessária carga histórica antes de ligar o streaming? | Fora do MVP (Pentaho/REST) | Não |
 | Q-15 | A empresa fará escritas no OPERA no futuro (supressão de eco com `x-externalSystem`)? | Fora do MVP | Não |
 | Q-16 | Como os logs chegam hoje ao MongoDB do time (coletor, agente, script)? | Fase 10 (deploy) | Serviço escreve JSON em stdout/journald; um coletor externo envia ao MongoDB (ADR-0010) |
+| Q-17 | Quem providencia o **schema Oracle 11g de teste descartável** (com `sql/001`–`003` aplicados) e uma **VM x86_64 com Instant Client 19** para rodar `make test-integration`? | Prova da Fase 3 contra banco real (os cenários já rodam no fake) | Adapter coberto por driver falso e cenários no fake; os testes `@oracle` ficam pulados (RUNBOOK) |
 
 ## D — Confirmar na documentação Oracle ou no sandbox
 

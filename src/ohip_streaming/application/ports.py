@@ -15,6 +15,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Any, Protocol
 
+from ohip_streaming.domain.connection import ConsumerState
 from ohip_streaming.domain.events import Event
 from ohip_streaming.domain.messages import QueueMessage
 from ohip_streaming.domain.offset import Offset
@@ -149,6 +150,38 @@ class EventStore(Protocol):
         """Mensagem continua inválida ou recusada: numa transação com barreira de epoch, mantém
         o item aberto, grava o motivo, ``attempts = attempts + 1`` e limpa o pedido."""
         ...
+
+
+# =============================================================== consumer: estado da conexão
+
+
+@dataclass(frozen=True, slots=True)
+class DisconnectSnapshot:
+    """Última desconexão registrada, com o relógio do banco (regra dos 10 s, ADR-0007)."""
+
+    db_now: datetime
+    last_disconnect_at: datetime | None
+    last_state: ConsumerState | None
+
+
+class ConsumerStatusStore(Protocol):
+    """OHIP_CONSUMER_STATUS. Os campos de heartbeat e RTT entram na Fase 5."""
+
+    async def record_state(self, chain_code: str, state: ConsumerState, instance_id: str) -> None:
+        """Levanta ``UnknownChainError`` se a chain não estiver provisionada."""
+        ...
+
+    async def record_disconnect(
+        self,
+        chain_code: str,
+        state: ConsumerState,
+        close_code: int | None,
+        close_reason: str | None,
+    ) -> None:
+        """Grava ``last_disconnect_at`` com o horário **do banco**, junto com o estado."""
+        ...
+
+    async def disconnect_snapshot(self, chain_code: str) -> DisconnectSnapshot: ...
 
 
 # =============================================================== publisher: outbox
