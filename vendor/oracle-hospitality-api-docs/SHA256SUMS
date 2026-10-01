@@ -1,0 +1,7 @@
+63c2d94aa25ee761c86630b5367b8bcf6c4033ff72909eee89114b11b0410c7c  ./LICENSE.txt
+dfaf280690926e683000ba3cf4270faab966f467b67e870130e8e552e1316622  ./graphql/streaming/StreamingGraphQLSchema.json
+98903508efedd0237f892667074e88a793b52a57558c1a78ebaced7f32f3fd62  ./graphql/streaming/graphiql.html
+756cb8ea3a7146057fc4e283b42f8114aab9070c68528af1a69d2a8bc6020e63  ./rest-api-specs/property/v1/crm.json
+90c9fe2375bc73c734e7f706c0882530e6e086cbb6860bc1ac80337e7acf36a4  ./rest-api-specs/property/v1/int.json
+8d95a8a060f2898eee7c9f749c83255ffde426258412c735e3f55180c0c000c1  ./rest-api-specs/property/v1/rsv.json
+93057878572e3eca7b71ec546b06e42028305ac33acf91c49b106ca85042bb63  ./rest-api-specs/security/v1/publishedoauth.json

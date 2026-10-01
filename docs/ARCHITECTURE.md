@@ -57,8 +57,8 @@ O consumer **nunca** roda dentro de Uvicorn/Gunicorn (ADR-0001). A comunicação
 | Subprotocolo | `Sec-WebSocket-Protocol: graphql-transport-ws` (sem ele: 4406) | Guia: Subscribing; Troubleshooting |
 | `connection_init` | em até **5 s** (senão 4408); payload `{"Authorization": "Bearer <token>", "x-app-key": "<appKey>"}` | Guia: Subscribing |
 | `subscribe` | `id` = GUID novo por assinatura, gerado após `connection_init`, reutilizado no `complete` | Guia: ID Lifecycle |
-| Input `newEvent` | `chainCode`; `offset` (string `^[0-9]+$`, tipo `StringWithLength20`); `offsetType` (`highest`); `delta` (bool); `hotelCode` (descrito no schema como lista separada por vírgula; o guia mostra só um código — D-9) | Schema GraphQL; Guia: Examples of the Subscribe Call |
-| Campos de saída | `metadata{offset uniqueEventId}`, `moduleName`, `eventName`, `primaryKey`, `timestamp`, `hotelId`, `publisherId`, `actionInstanceId`, `detail{elementName oldValue newValue scopeFrom scopeTo ...}` | Schema GraphQL; Guia: Interpreting the Event |
+| Input `newEvent` | `chainCode` (≤ 20, `^[A-Za-z0-9 _%#$&-]+$`); `offset` (string `^[0-9]+$`, scalar `StringWithLength20`; a descrição diz 10 — D-11); `offsetType` (`highest`); `delta` (bool); `hotelCode` (lista separada por vírgula, ≤ 50 no total — D-9) | Schema oficial em vendor/ (ADR-0012, teste de contrato); Guia: Examples of the Subscribe Call |
+| Campos de saída | `metadata{offset uniqueEventId}` (`String!`), `moduleName`, `eventName`, `primaryKey`, `timestamp` (`String!`), `hotelId`, `publisherId`, `actionInstanceId`, `detail{elementName oldValue newValue scopeFrom scopeTo elementSequence elementType elementRole}`; `dataValueMapping` opcional, não pedido (D-12) | Schema oficial em vendor/; Guia: Interpreting the Event |
 | Escolha de eventos | Feita no **Developer Portal** (assinatura + aprovação do dono do ambiente), não no `subscribe` | Guia: Prerequisites → Application Key |
 | Heartbeat | cliente envia `{"type":"ping"}` a cada **15 s** e responde `pong` aos pings do servidor; servidor fecha se não vê `pong` em **180 s** | Guia: Performance Considerations |
 | Backpressure | acima de ~1,8 MB o servidor envia em rajadas e pode **adiar o `pong`**; mensagens `next` contam como prova de vida | Guia: Backpressure Mode |
@@ -70,8 +70,8 @@ O consumer **nunca** roda dentro de Uvicorn/Gunicorn (ADR-0001). A comunicação
 | Duplicados | "mesmo `primaryKey` e `offset`" = duplicado; processar o primeiro | Guia: Troubleshooting |
 | Consumidor único | um assinante por (appKey, chainCode, gateway); segundo recebe **4409**; lockout ≈ **2 min** + jitter | Guia: Limitations; Troubleshooting |
 | Limite de requisições | Streaming não é limitado por vazão, mas "requisições de entrada" têm limite de 12/min (rajada 100/min) — D-5 | Guia: Scaling |
-| Token | OAuth `POST <gateway>/oauth/v1/tokens`; **token por chain/ambiente**; renovar antes do `exp`. O guia não cobre a obtenção do token: `TODO(confirmar-doc)` D-2 | Guia: Prerequisites → OAuth Token; OHIP User Guide |
-| Status da conexão | `query { connection { id status } }` após init; `Inactive` → pode assinar. Formato no graphql-transport-ws a validar (D-4); **desligado por padrão** | Guia: Scaling Recommendations |
+| Token | OAuth `POST <gateway>/oauth/v1/tokens`; **token por chain/ambiente**; renovar ≥ 2 min antes do `exp` e reaproveitar (pedido de token é cobrado). Basic `ClientID:ClientSecret`, `x-app-key`, `enterpriseId` só em client_credentials/OCIM (D-2 resolvida) | Spec `publishedoauth.json` (vendor/, ADR-0012); OHIP User Guide → Property APIs |
+| Status da conexão | `query { connection { id status } }` após init, num `subscribe` com `id` próprio (resposta `next` + `complete`, como no cliente de referência da Oracle); `Inactive` → pode assinar. Validar no sandbox (D-4); **desligado por padrão** | Guia: Scaling Recommendations; schema e `graphiql.html` oficiais |
 
 ### 3.1 Máquina de estados do consumer
 

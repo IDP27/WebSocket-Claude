@@ -2,7 +2,7 @@
 
 Serviço Python que consome eventos do OPERA Cloud pela OHIP Streaming API (WebSocket + GraphQL), grava no Oracle 11g sem perda nem duplicidade e publica no RabbitMQ via outbox. O PRD vence em caso de conflito; na dúvida, pergunte.
 
-Leia antes de qualquer tarefa: `docs/ARCHITECTURE.md`, `docs/PLAN.md`, `docs/OPEN_QUESTIONS.md` e os ADRs em `docs/adr/`.
+Leia antes de qualquer tarefa: `docs/ARCHITECTURE.md`, `docs/PLAN.md`, `docs/OPEN_QUESTIONS.md`, `docs/OHIP_APIS.md` e os ADRs em `docs/adr/`. Contratos da Oracle: `vendor/oracle-hospitality-api-docs/` (ADR-0012), conferidos por `tests/contract/`.
 
 ## Regras de conduta
 

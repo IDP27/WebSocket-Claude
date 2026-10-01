@@ -91,7 +91,8 @@ class OhipSettings(BaseSettings):
     enterprise_id: str | None = None
     integration_username: str | None = None
     integration_password: SecretStr | None = None
-    # TODO(confirmar-doc): caminho e escopo do OAuth (D-2); o guia de streaming não cobre o token.
+    # Caminho e escopo conferidos na spec oficial publishedoauth.json e na coleção Postman da
+    # Oracle (D-2, ADR-0012); configuráveis por ambiente. Teste: tests/contract.
     oauth_token_path: str = "/oauth/v1/tokens"  # noqa: S105 - caminho da URL, não é segredo
     oauth_scope: str = "urn:opc:hgbu:ws:__myscopes__"
 

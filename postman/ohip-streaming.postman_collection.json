@@ -1,0 +1,309 @@
+{
+  "info": {
+    "_postman_id": "6f1c0a52-3c1e-4c8e-9d2b-0b7a5f0e1a11",
+    "name": "ohip-streaming — APIs Oracle usadas pelo projeto",
+    "description": "Chamadas da Oracle que o ohip-streaming usa, conferidas contra as specs oficiais em vendor/oracle-hospitality-api-docs (commit 4bd129b). Análise: docs/OHIP_APIS.md.\n\n**Regras**\n- Use só ambientes de sandbox/homologação. **Nunca** a app key de produção: o Postman não mantém o heartbeat do Streaming e uma conexão dele disputa/derruba o consumer (4409).\n- Pedir token é cobrado para parceiros: reaproveite o token até ~2 min antes do `exp`.\n- Não exporte nem commite o environment preenchido (postman/README.md).\n- O Streaming (WebSocket + GraphQL) não é testado por aqui: use o cliente de referência da Oracle (vendor/.../graphql/streaming/graphiql.html) contra o sandbox.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "1. OAuth (Fase 4)",
+      "description": "POST /oauth/v1/tokens — spec: rest-api-specs/security/v1/publishedoauth.json.",
+      "item": [
+        {
+          "name": "Token — client_credentials (OCIM)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Guarda o token só no environment (valor atual, nunca no valor inicial) e calcula o",
+                  "// hash da app key usado na URL do Streaming. Nunca imprime o token.",
+                  "pm.test('token emitido', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.environment.set('Token', body.access_token);",
+                  "pm.environment.set('HashedAppKey', CryptoJS.SHA256(pm.environment.get('AppKey')).toString());",
+                  "console.log('token expira em (s):', body.expires_in);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "basic",
+              "basic": [
+                {
+                  "key": "username",
+                  "value": "{{CLIENT_ID}}",
+                  "type": "string"
+                },
+                {
+                  "key": "password",
+                  "value": "{{CLIENT_SECRET}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/x-www-form-urlencoded",
+                "type": "text"
+              },
+              {
+                "key": "x-app-key",
+                "value": "{{AppKey}}",
+                "type": "text"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}",
+                "type": "text"
+              },
+              {
+                "key": "enterpriseId",
+                "value": "{{EnterpriseId}}",
+                "type": "text",
+                "description": "Só em ambientes OCIM com client_credentials."
+              }
+            ],
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "grant_type",
+                  "value": "client_credentials",
+                  "type": "text"
+                },
+                {
+                  "key": "scope",
+                  "value": "{{Scope}}",
+                  "type": "text"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{HostName}}/oauth/v1/tokens",
+              "host": [
+                "{{HostName}}"
+              ],
+              "path": [
+                "oauth",
+                "v1",
+                "tokens"
+              ]
+            },
+            "description": "OHIP_AUTH_MODE=client_credentials. Basic = CLIENT_ID:CLIENT_SECRET."
+          }
+        },
+        {
+          "name": "Token — resource owner (usuário de integração)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Guarda o token só no environment (valor atual, nunca no valor inicial) e calcula o",
+                  "// hash da app key usado na URL do Streaming. Nunca imprime o token.",
+                  "pm.test('token emitido', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.environment.set('Token', body.access_token);",
+                  "pm.environment.set('HashedAppKey', CryptoJS.SHA256(pm.environment.get('AppKey')).toString());",
+                  "console.log('token expira em (s):', body.expires_in);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "basic",
+              "basic": [
+                {
+                  "key": "username",
+                  "value": "{{CLIENT_ID}}",
+                  "type": "string"
+                },
+                {
+                  "key": "password",
+                  "value": "{{CLIENT_SECRET}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/x-www-form-urlencoded",
+                "type": "text"
+              },
+              {
+                "key": "x-app-key",
+                "value": "{{AppKey}}",
+                "type": "text"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "{{$guid}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "grant_type",
+                  "value": "password",
+                  "type": "text"
+                },
+                {
+                  "key": "username",
+                  "value": "{{Username}}",
+                  "type": "text"
+                },
+                {
+                  "key": "password",
+                  "value": "{{Password}}",
+                  "type": "text"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{HostName}}/oauth/v1/tokens",
+              "host": [
+                "{{HostName}}"
+              ],
+              "path": [
+                "oauth",
+                "v1",
+                "tokens"
+              ]
+            },
+            "description": "OHIP_AUTH_MODE=resource_owner. Basic = CLIENT_ID:CLIENT_SECRET + usuário de integração do OPERA."
+          }
+        }
+      ]
+    },
+    {
+      "name": "2. Enriquecimento — recurso completo (Fase 9)",
+      "description": "O enricher busca o recurso completo pelo primaryKey + hotelId do evento (RF-09). Os módulos enriquecidos dependem da Q-1; aqui estão os dois certos.",
+      "item": [
+        {
+          "name": "Reserva — getReservation (moduleName RESERVATION)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "if (pm.response.code === 429) { console.warn('429: respeitar Retry-After (RF-09)'); }"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{Token}}",
+                "type": "text"
+              },
+              {
+                "key": "x-app-key",
+                "value": "{{AppKey}}",
+                "type": "text"
+              },
+              {
+                "key": "x-hotelid",
+                "value": "{{HotelId}}",
+                "type": "text",
+                "description": "Obrigatório em todas as Property APIs, inclusive no CRM."
+              },
+              {
+                "key": "x-request-id",
+                "value": "{{$guid}}",
+                "type": "text",
+                "description": "GUID por chamada: ajuda a Oracle a investigar problemas."
+              }
+            ],
+            "url": {
+              "raw": "{{HostName}}/rsv/v1/hotels/{{HotelId}}/reservations/{{ReservationId}}",
+              "host": [
+                "{{HostName}}"
+              ],
+              "path": [
+                "rsv",
+                "v1",
+                "hotels",
+                "{{HotelId}}",
+                "reservations",
+                "{{ReservationId}}"
+              ]
+            },
+            "description": "Spec: rest-api-specs/property/v1/rsv.json, operationId getReservation."
+          }
+        },
+        {
+          "name": "Perfil — getProfile (moduleName PROFILE)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "if (pm.response.code === 429) { console.warn('429: respeitar Retry-After (RF-09)'); }"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{Token}}",
+                "type": "text"
+              },
+              {
+                "key": "x-app-key",
+                "value": "{{AppKey}}",
+                "type": "text"
+              },
+              {
+                "key": "x-hotelid",
+                "value": "{{HotelId}}",
+                "type": "text",
+                "description": "Obrigatório em todas as Property APIs, inclusive no CRM."
+              },
+              {
+                "key": "x-request-id",
+                "value": "{{$guid}}",
+                "type": "text",
+                "description": "GUID por chamada: ajuda a Oracle a investigar problemas."
+              }
+            ],
+            "url": {
+              "raw": "{{HostName}}/crm/v1/profiles/{{ProfileId}}",
+              "host": [
+                "{{HostName}}"
+              ],
+              "path": [
+                "crm",
+                "v1",
+                "profiles",
+                "{{ProfileId}}"
+              ]
+            },
+            "description": "Spec: rest-api-specs/property/v1/crm.json, operationId getProfile. A resposta tem dados pessoais: não salve exemplos com dados reais."
+          }
+        }
+      ]
+    }
+  ]
+}

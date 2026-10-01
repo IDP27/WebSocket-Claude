@@ -27,6 +27,9 @@ Outros alvos: `make help`. Testes que precisam de Oracle/RabbitMQ/Redis: `make t
 | [docs/UI.md](docs/UI.md) | Painel operacional (Flask) e wireframes |
 | [docs/PLAN.md](docs/PLAN.md) | Plano por fases e caminho crítico |
 | [docs/OPEN_QUESTIONS.md](docs/OPEN_QUESTIONS.md) | Perguntas em aberto e divergências PRD × documentação |
+| [docs/OHIP_APIS.md](docs/OHIP_APIS.md) | APIs da Oracle usadas (Streaming, OAuth, REST do enricher) conferidas contra as specs oficiais |
+| [vendor/oracle-hospitality-api-docs/](vendor/oracle-hospitality-api-docs/PROVENANCE.md) | Cópia fixada das specs oficiais da Oracle (ADR-0012); atualizar com `scripts/sync_oracle_api_docs.sh` |
+| [postman/](postman/README.md) | Coleção e environment-modelo do Postman (sandbox) |
 | [docs/RUNBOOK.md](docs/RUNBOOK.md) | Operação (em construção) |
 | [docs/adr/](docs/adr/) | Decisões de arquitetura |
 | [.env.example](.env.example) | Todas as variáveis de configuração, por grupo |

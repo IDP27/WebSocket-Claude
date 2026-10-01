@@ -16,6 +16,9 @@ dist/
 *.pem
 *.key
 
+# Exportações locais do Postman (com valores)
+postman/*.local.json
+
 # Diversos
 .DS_Store
 *.log
