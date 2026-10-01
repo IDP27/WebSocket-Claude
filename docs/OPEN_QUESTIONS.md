@@ -22,6 +22,7 @@
 | Q-13 | Quem declara as filas do n8n e de outros consumidores (nós ou cada time)? Convenção de nomes? | Fase 6 | Nós declaramos os exchanges `ohip.events`, `ohip.events.unrouted` e `ohip.reprocess` e a fila `ohip.enricher`; cada time declara a sua fila e o binding em `ohip.events` (reprocessamentos não chegam a terceiros) |
 | Q-14 | É necessária carga histórica antes de ligar o streaming? | Fora do MVP (Pentaho/REST) | Não |
 | Q-15 | A empresa fará escritas no OPERA no futuro (supressão de eco com `x-externalSystem`)? | Fora do MVP | Não |
+| Q-16 | Como os logs chegam hoje ao MongoDB do time (coletor, agente, script)? | Fase 10 (deploy) | Serviço escreve JSON em stdout/journald; um coletor externo envia ao MongoDB (ADR-0010) |
 
 ## D — Confirmar na documentação Oracle ou no sandbox
 

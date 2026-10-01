@@ -1,0 +1,62 @@
+; Contratos de arquitetura (ADR-0005). Rodam com `poetry run lint-imports` e também
+; dentro do pytest (tests/architecture/test_import_contracts.py).
+
+[importlinter]
+root_package = ohip_streaming
+include_external_packages = True
+
+[importlinter:contract:camadas]
+name = Camadas: entrypoints > adapters > application > domain
+type = layers
+layers =
+    ohip_streaming.entrypoints
+    ohip_streaming.adapters
+    ohip_streaming.application
+    ohip_streaming.domain
+
+[importlinter:contract:nucleo-sem-infraestrutura]
+name = domain e application não importam infraestrutura nem configuração
+type = forbidden
+source_modules =
+    ohip_streaming.domain
+    ohip_streaming.application
+forbidden_modules =
+    oracledb
+    websockets
+    fastapi
+    flask
+    aio_pika
+    redis
+    httpx
+    uvicorn
+    gunicorn
+    pydantic_settings
+    ohip_streaming.config
+
+[importlinter:contract:dominio-puro]
+name = domain não depende de bibliotecas de log nem de validação
+type = forbidden
+source_modules =
+    ohip_streaming.domain
+forbidden_modules =
+    structlog
+    pydantic
+    ohip_streaming.logging
+
+[importlinter:contract:painel-via-api]
+name = Painel Flask fala só com a API (ADR-0004)
+type = forbidden
+source_modules =
+    ohip_streaming.entrypoints.admin
+forbidden_modules =
+    ohip_streaming.adapters.oracle
+    ohip_streaming.adapters.redis
+    oracledb
+    redis
+
+[importlinter:contract:api-e-painel-independentes]
+name = API e painel não importam um ao outro
+type = independence
+modules =
+    ohip_streaming.entrypoints.api
+    ohip_streaming.entrypoints.admin

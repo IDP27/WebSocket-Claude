@@ -6,7 +6,7 @@
 | Fase | Entrega | Tamanho | Depende de | Bloqueios externos |
 | --- | --- | --- | --- | --- |
 | 0. Concepção | Docs, ADRs, DDL rascunho, estrutura, agentes e comandos | M | — | — |
-| 1. Esqueleto | Poetry, `config.py` (pydantic-settings), logging JSON, ruff/mypy/pytest/import-linter, `.env.example`, `Makefile` | P | 0 | — |
+| 1. Esqueleto ✅ em revisão | Poetry, `config.py` (pydantic-settings), logging JSON, ruff/mypy/pytest/import-linter, `.env.example`, `Makefile` | P | 0 | — |
 | 2. Domain e application | `Event`, `Offset`, `ChainCode`, routing key, máscara LGPD, política de fechamento/backoff; ports; casos de uso com fakes | M | 1 | — |
 | 3. Adapter Oracle | Pool Thick, `EventStore` (lote + epoch + dedup + outbox), repositórios de status/DLQ/replay; testes `@pytest.mark.oracle` | G | 2 | Oracle 11g de teste + Instant Client 19 |
 | 4. Auth, lease e Redis | `TokenProvider` (OAuth, cache, margem), `Lease` no Oracle (ADR-0008), caches e métricas no Redis | M | 2, 3 | Q-10, Q-12, DV-12 |

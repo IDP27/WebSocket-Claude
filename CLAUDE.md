@@ -63,11 +63,12 @@ Python 3.11+ · Poetry · systemd · FastAPI + Uvicorn · Flask + Gunicorn + Jin
 
 Testes unitários e de integração passando (≥ 80% no núcleo) · ruff, mypy e import-linter limpos · revisor sem achados críticos/altos · orçamentos de desempenho atendidos (quando aplicável) · ARCHITECTURE, RUNBOOK e ADRs atualizados · aprovação humana.
 
-## Comandos de qualidade (a partir da Fase 1)
+## Comandos de qualidade
 
 ```bash
-poetry run ruff check . && poetry run ruff format --check .
-poetry run mypy src
-poetry run lint-imports
-poetry run pytest -m "not oracle and not rabbitmq and not redis" --cov=ohip_streaming
+make check              # tudo: ruff, mypy strict, import-linter, pytest + cobertura
+make format             # ruff format + correções automáticas
+make test-integration   # testes marcados oracle/rabbitmq/redis (precisa de infraestrutura)
 ```
+
+Configuração: um grupo por prefixo em `src/ohip_streaming/config.py`, carregado com `load_settings(Grupo)` só nos entrypoints. Toda variável nova entra no `.env.example` (há teste). Logs: `get_logger()` e `bind_context(unique_event_id=..., chain_code=..., offset=...)` de `ohip_streaming.logging`.

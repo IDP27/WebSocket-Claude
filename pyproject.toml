@@ -1,0 +1,110 @@
+[project]
+name = "ohip-streaming"
+version = "0.1.0"
+description = "Consumidor de eventos OHIP Streaming (OPERA Cloud) com gravação no Oracle 11g e publicação via outbox no RabbitMQ"
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+authors = [{ name = "Time de Dados" }]
+dependencies = [
+    "fastapi (>=0.142.2,<0.143.0)",
+    "uvicorn (>=0.54.0,<0.55.0)",
+    "flask (>=3.1.3,<4.0.0)",
+    "gunicorn (>=26.2.0,<27.0.0)",
+    "websockets (>=17.1,<18.0)",
+    "httpx (>=0.28.1,<0.29.0)",
+    "oracledb (>=26.0.1,<27.0.0)",
+    "aio-pika (>=10.1.0,<11.0.0)",
+    "redis (>=8.1.0,<9.0.0)",
+    "pydantic-settings (>=2.15.0,<3.0.0)",
+    "structlog (>=26.1.0,<27.0.0)",
+]
+
+[tool.poetry]
+packages = [{ include = "ohip_streaming", from = "src" }]
+
+[dependency-groups]
+dev = [
+    "ruff (>=0.16.9,<0.17.0)",
+    "mypy (>=2.3.1,<3.0.0)",
+    "pytest (>=9.1.1,<10.0.0)",
+    "pytest-asyncio (>=1.4.0,<2.0.0)",
+    "pytest-cov (>=7.1.0,<8.0.0)",
+    "respx (>=0.23.1,<0.24.0)",
+    "import-linter (>=2.15,<3.0)",
+    "py-spy (>=0.4.2,<0.5.0)",
+]
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+# --------------------------------------------------------------------------- ruff
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E", "W",   # pycodestyle
+    "F",        # pyflakes
+    "I",        # isort
+    "B",        # bugbear
+    "UP",       # pyupgrade
+    "S",        # bandit (segurança)
+    "SIM",      # simplificações
+    "RUF",      # regras do ruff
+    "DTZ",      # datetimes sem fuso
+    "ASYNC",    # armadilhas de asyncio
+    "PT",       # pytest
+    "N",        # nomes
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S105", "S106"]  # assert e senhas falsas em teste
+
+[tool.ruff.lint.isort]
+known-first-party = ["ohip_streaming"]
+
+# --------------------------------------------------------------------------- mypy
+[tool.mypy]
+python_version = "3.11"
+strict = true
+mypy_path = "src"
+packages = ["ohip_streaming"]
+plugins = ["pydantic.mypy"]
+warn_unreachable = true
+
+[[tool.mypy.overrides]]
+module = ["tests.*"]
+disallow_untyped_defs = false
+
+# --------------------------------------------------------------------------- pytest
+[tool.pytest.ini_options]
+minversion = "9.0"
+testpaths = ["tests"]
+pythonpath = ["src"]
+asyncio_mode = "auto"
+addopts = ["--strict-markers", "--strict-config", "-ra"]
+markers = [
+    "oracle: precisa de um Oracle 11g de teste (ORACLE_* no ambiente)",
+    "rabbitmq: precisa de um RabbitMQ de teste",
+    "redis: precisa de um Redis de teste",
+    "load: teste de carga contra o servidor OHIP simulado",
+]
+filterwarnings = ["error"]
+
+# --------------------------------------------------------------------------- coverage
+[tool.coverage.run]
+source = ["ohip_streaming"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+fail_under = 80
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "\\.\\.\\.",
+]
