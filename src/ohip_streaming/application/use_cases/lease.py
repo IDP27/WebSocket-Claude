@@ -14,6 +14,7 @@ Regras:
 
 from __future__ import annotations
 
+import asyncio
 import random
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -69,9 +70,12 @@ class LeaseKeeper:
         """Tínhamos o lease e o perdemos (recusa ou prazo vencido sem renovar)."""
         return self._lost or (self._epoch is not None and self.epoch is None)
 
-    async def acquire(self) -> int:
-        """Espera até virar dono. Erros de banco também esperam e tentam de novo."""
-        while True:
+    async def acquire(self, stop: asyncio.Event | None = None) -> int | None:
+        """Espera até virar dono. Erros de banco também esperam e tentam de novo.
+
+        Devolve None se ``stop`` for marcado antes (SIGTERM numa instância passiva).
+        """
+        while stop is None or not stop.is_set():
             started = self._clock.now()  # o banco conta o prazo durante a chamada
             try:
                 epoch = await self._store.acquire(self._name, self._owner, self._options.ttl_s)
@@ -83,9 +87,21 @@ class LeaseKeeper:
                 self._metrics.increment("ohip_lease_acquired_total", lease=self._name)
                 log.info("lease_adquirido", lease=self._name, epoch=epoch)
                 return epoch
-            await self._clock.sleep(
-                self._options.ttl_s + self._rng.uniform(0, self._options.acquire_jitter_s)
-            )
+            wait = self._options.ttl_s + self._rng.uniform(0, self._options.acquire_jitter_s)
+            await self._sleep(wait, stop)
+        return None
+
+    async def _sleep(self, seconds: float, stop: asyncio.Event | None) -> None:
+        if stop is None:
+            await self._clock.sleep(seconds)
+            return
+        sleeper = asyncio.ensure_future(self._clock.sleep(seconds))
+        stopper = asyncio.ensure_future(stop.wait())
+        try:
+            await asyncio.wait({sleeper, stopper}, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            for task in (sleeper, stopper):
+                task.cancel()
 
     async def renew_once(self) -> bool:
         """Uma renovação. False quando o lease foi perdido."""

@@ -60,6 +60,10 @@ class TokenProvider:
             self._token = token
             return token
 
+    def refresh_due(self, token: AccessToken) -> bool:
+        """O token entrou na margem de renovação (a mesma regra do ``get``)."""
+        return self._usable(token) is None
+
     async def invalidate(self) -> None:
         """O servidor recusou o token (4401): descarta em memória e no cache.
 

@@ -27,6 +27,13 @@ Os cenários de `tests/stores/` rodam no fake e, com estas variáveis, num Oracl
 
    Sem `TEST_ORACLE_DISPOSABLE_SCHEMA=sim` os testes de Oracle são pulados. **Nunca** aponte para homologação ou produção.
 
+## Consumer (`ohip-consumer`)
+
+- Um processo por chain (`OHIP_CHAIN_CODE`), nunca dentro de Uvicorn/Gunicorn: `ohip-consumer` (ou `python -m ohip_streaming.entrypoints.consumer`). A unit do systemd com `RestartSec=10` entra na Fase 10.
+- SIGTERM: `complete` → drena → grava a desconexão → libera o lease → sai. Não use `kill -9` (o próximo start espera 10 s inteiros, mas nada se perde).
+- Estado em `OHIP_CONSUMER_STATUS`: `SUBSCRIBED` = recebendo; `WAITING` = aguardando reconexão; `DRAINING` = encerrando a assinatura; `STOPPED` = **ação humana** (4403/4406 ou mensagem grande demais repetida); o processo fica parado até ser reiniciado depois da correção.
+- Logs úteis: `ohip_assinado` (subscription_id, offset: informe ao suporte Oracle), `conexao_envenenada` (fila travada ou banco fora: reconecta pelo offset confirmado), `ohip_sem_prova_de_vida`, `ohip_assinatura_encerrada` (frame `error` do servidor, D-10), `ws_handshake_recusado` (HTTP 400: hash da app key ou URL), `consumer_alerta`/`consumer_parado`.
+
 ## Hash da app key
 
 ```bash

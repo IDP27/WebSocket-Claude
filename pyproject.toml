@@ -19,6 +19,9 @@ dependencies = [
     "structlog (>=26.1.0,<27.0.0)",
 ]
 
+[project.scripts]
+ohip-consumer = "ohip_streaming.entrypoints.consumer:main"
+
 [tool.poetry]
 packages = [{ include = "ohip_streaming", from = "src" }]
 

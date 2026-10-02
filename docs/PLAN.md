@@ -10,7 +10,7 @@
 | 2. Domain e application ✅ aprovada | `Event`, `Offset`, `ChainCode`, routing key, máscara LGPD, política de fechamento/backoff; ports; casos de uso com fakes | M | 1 | — |
 | 3. Adapter Oracle ✅ aprovada (validação em Oracle real pendente, Q-17) | Pool Thick, `EventStore` (lote + epoch + dedup + outbox), repositórios de status/DLQ/replay; testes `@pytest.mark.oracle` rodando os mesmos cenários dos fakes, incluindo a classificação dos ORA de espaço (01653/01654/01688/01691/30036 → `StoreUnavailableError`, base do disjuntor, ADR-0011 §7) e a ordem atômica dos retries de DLQ | G | 2 | Oracle 11g de teste + Instant Client 19 |
 | 4. Auth, lease e Redis (+ `LeaseSettings` comum, ADR-0010) ✅ aprovada | `TokenProvider` (OAuth, cache, margem), `Lease` no Oracle (ADR-0008), caches e métricas no Redis | M | 2, 3 | Q-10, Q-12, DV-12 |
-| 5. Consumer WebSocket | Protocolo, heartbeat dinâmico, máquina de estados, códigos, replay, shutdown; `fake_ohip_server.py` e cenários | G | 3, 4 | Sandbox OHIP para validar D-1, D-4, D-7 (não bloqueia o código) |
+| 5. Consumer WebSocket ✅ aprovada (validação no sandbox OHIP pendente) | Protocolo, heartbeat dinâmico, máquina de estados, códigos, replay, shutdown; `fake_ohip_server.py` e cenários | G | 3, 4 | Sandbox OHIP para validar D-1, D-4, D-7 (não bloqueia o código) |
 | 6. Publisher outbox | Lotes por chain, publisher confirms, backoff com cabeça da fila, DLQ; testes de contrato | M | 3 | RabbitMQ de teste; Q-13 |
 | 7. API FastAPI | Endpoints, perfis, auditoria, OpenAPI, `/metrics` | M | 3 | — |
 | 8. Painel Flask | Páginas, componentes, HTMX, cliente da API | M | 7 | Q-5 |

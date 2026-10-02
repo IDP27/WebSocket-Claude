@@ -293,7 +293,8 @@ entrypoints ──▶ application ──▶ domain
 - `adapters/oracle/` (Fase 3, ADR-0013): `database.py` (pool Thick, `DedicatedSession` para a escrita do consumer, `PooledSession`, transação e barreira), `errors.py` (indisponível × duplicado × falha), `event_store.py`, `outbox_store.py`, `replay_store.py`, `operations_store.py`, `status_store.py`. Lease (Fase 4) e `EnrichmentStore` (Fase 9) ainda não.
 - `adapters/ohip_rest/oauth.py` (Fase 4, ADR-0014): emissor do token OAuth. `adapters/oracle/lease_store.py`: lease do ADR-0008. `adapters/redis/`: dedup rápido, dedup do enricher, cache do token e snapshot de métricas.
 - `application/use_cases/token_provider.py` e `lease.py` (Fase 4): `TokenProvider` e `LeaseKeeper`.
-- Demais `adapters/`: `ohip_ws`, `rabbitmq`.
+- Fase 5 (ADR-0015): `domain/protocol.py` (mensagens no formato do guia), `application/intake.py` (fila interna), `application/use_cases/consume_chain.py` (`ChainConsumer` e sessão), `adapters/ohip_ws/client.py` (`websockets`), `entrypoints/consumer.py` (processo `ohip-consumer`).
+- Demais `adapters/`: `rabbitmq`.
 - `entrypoints/`: `consumer.py`, `publisher.py`, `enricher.py`, `api/`, `admin/`.
 
 `import-linter` (ADR-0005): `domain`/`application` sem `oracledb`, `websockets`, `fastapi`, `flask`, `aio_pika`, `redis`, `httpx`; `entrypoints.admin` sem `adapters.oracle`, `adapters.redis`, `oracledb`, `redis`.

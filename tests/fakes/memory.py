@@ -23,6 +23,7 @@ from ohip_streaming.application.ports import (
     AccessToken,
     BatchResult,
     BatchToPersist,
+    Clock,
     ConsumeRetryItem,
     DisconnectSnapshot,
     DlqItem,
@@ -632,7 +633,7 @@ class InMemoryDatabase:
 
 
 class FakeTokenIssuer:
-    def __init__(self, clock: FakeClock, *, lifetime_s: float = 3600) -> None:
+    def __init__(self, clock: Clock, *, lifetime_s: float = 3600) -> None:
         self.clock = clock
         self.lifetime_s = lifetime_s
         self.issued = 0

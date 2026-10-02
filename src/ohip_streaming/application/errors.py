@@ -86,3 +86,26 @@ class LeaseNotProvisionedError(ApplicationError):
     """Não existe linha em OHIP_LEASE para o recurso: erro de provisionamento (ADR-0008)."""
 
     code = "LEASE_NOT_PROVISIONED"
+
+
+class ConnectionClosedError(ApplicationError):
+    """O WebSocket fechou. ``code`` é o código de fechamento (None = queda sem código)."""
+
+    code = "WS_CLOSED"
+
+    def __init__(self, close_code: int | None, reason: str = "") -> None:
+        super().__init__(f"conexão fechada ({close_code}): {reason}".strip())
+        self.close_code = close_code
+        self.reason = reason
+
+
+class MessageTooLargeError(ConnectionClosedError):
+    """Mensagem acima de ``OHIP_WS_MAX_MESSAGE_BYTES`` (o cliente fechou com 1009)."""
+
+    code = "WS_MESSAGE_TOO_LARGE"
+
+
+class HandshakeRejectedError(ApplicationError):
+    """O gateway recusou o upgrade (ex.: HTTP 400 por chave ou URL errada): configuração."""
+
+    code = "WS_HANDSHAKE_REJECTED"

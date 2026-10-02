@@ -225,3 +225,23 @@ def test_oauth_headers() -> None:
     assert params["enterpriseId"]["in"] == "header"
     assert params["enterpriseId"]["required"] is False  # só client_credentials em OCIM
     assert re.fullmatch(params["enterpriseId"]["pattern"], "ENT123")
+
+
+def test_subscription_selection_exists_in_the_schema() -> None:
+    """Todo campo pedido no subscribe (domain/protocol.py) existe no schema oficial."""
+    from ohip_streaming.domain.protocol import EVENT_SELECTION
+
+    tokens = EVENT_SELECTION.replace("{", " { ").replace("}", " } ").split()
+    stack = ["EventHeader"]
+    previous: str | None = None
+    for token in tokens:
+        if token == "{":
+            assert previous is not None
+            name, _ = _unwrap(_fields(stack[-1])[previous]["type"])
+            stack.append(name)
+        elif token == "}":
+            stack.pop()
+        else:
+            assert token in _fields(stack[-1]), f"{token} não existe em {stack[-1]}"
+            previous = token
+    assert "dataValueMapping" not in tokens  # D-12: não pedido

@@ -184,6 +184,31 @@ class ConsumerStatusStore(Protocol):
     async def disconnect_snapshot(self, chain_code: str) -> DisconnectSnapshot: ...
 
 
+# =============================================================== WebSocket do OHIP
+
+
+class WsConnection(Protocol):
+    async def send(self, text: str) -> None:
+        """Levanta ``ConnectionClosedError`` se a conexão caiu."""
+        ...
+
+    async def recv(self) -> str:
+        """Próximo frame de texto. Levanta ``ConnectionClosedError`` (ou
+        ``MessageTooLargeError``) quando a conexão fecha."""
+        ...
+
+    async def close(self) -> None:
+        """Fecha do lado do cliente. Só depois de esgotar a espera pelo servidor (ADR-0007)."""
+        ...
+
+
+class WsConnector(Protocol):
+    async def connect(self) -> WsConnection:
+        """Abre ``wss://.../subscriptions?key=...`` com o subprotocolo. Levanta
+        ``ConnectionClosedError`` (rede) ou ``HandshakeRejectedError``."""
+        ...
+
+
 # =============================================================== token OAuth e lease
 
 
