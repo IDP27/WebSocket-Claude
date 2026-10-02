@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from pydantic import SecretStr
-from tests.fakes.memory import EXCHANGES, InMemoryDatabase
+from tests.fakes.memory import EXCHANGES, InMemoryDatabase, MemoryLeaseStore
 
 from ohip_streaming.adapters.oracle.database import (
     DedicatedSession,
@@ -31,6 +31,7 @@ from ohip_streaming.adapters.oracle.database import (
     open_pool,
 )
 from ohip_streaming.adapters.oracle.event_store import OracleEventStore
+from ohip_streaming.adapters.oracle.lease_store import OracleLeaseStore
 from ohip_streaming.adapters.oracle.operations_store import OracleOperationsStore
 from ohip_streaming.adapters.oracle.outbox_store import OracleOutboxStore
 from ohip_streaming.adapters.oracle.replay_store import OracleReplayStore
@@ -38,6 +39,7 @@ from ohip_streaming.adapters.oracle.status_store import OracleConsumerStatusStor
 from ohip_streaming.application.ports import (
     ConsumerStatusStore,
     EventStore,
+    LeaseStore,
     OperationsStore,
     OutboxStore,
     ReplayStore,
@@ -79,6 +81,7 @@ class Backend:
     replay: ReplayStore
     operations: OperationsStore
     status: ConsumerStatusStore
+    leases: LeaseStore
 
     def acquire(self, lease: str) -> int:
         """Novo dono do lease: devolve o epoch novo (o anterior vira zumbi)."""
@@ -122,6 +125,7 @@ class MemoryBackend(Backend):
             self.db.provision_chain(chain)
         self.db.leases.setdefault("publisher", 0)
         self.events = self.outbox = self.replay = self.operations = self.status = self.db
+        self.leases = MemoryLeaseStore(self.db)
 
     def acquire(self, lease: str) -> int:
         return self.db.acquire(lease)
@@ -236,6 +240,7 @@ class OracleBackend(Backend):
         self.replay = OracleReplayStore(pooled)
         self.operations = OracleOperationsStore(pooled)
         self.status = OracleConsumerStatusStore(pooled)
+        self.leases = OracleLeaseStore(pooled)
         self._reset()
 
     @classmethod

@@ -260,6 +260,7 @@ Propriedades AMQP: `message_id=<uniqueEventId>`, `content_type=application/json`
 | --- | --- | --- | --- |
 | Token OAuth | `ohip:token:<ambiente>:<chain>` | `exp − margem` | Por chain (DV-2). Sem Redis: cada processo busca o seu token |
 | Dedup rápido | `ohip:seen:<uniqueEventId>` | 24 h | gravado **após** o commit |
+| Dedup do enricher | `ohip:processed:<message_id>` | configurável | marcado só depois do sucesso |
 | Recurso REST | `ohip:rest:<modulo>:<hotel>:<primaryKey>` | 30–60 s | coalesce rajadas |
 | LOV | `ohip:lov:<hotel>:<tipo>` | 24 h | |
 | Status da API | `ohip:api:status` | 5 s | protege o Oracle do polling do painel |
@@ -290,7 +291,9 @@ entrypoints ──▶ application ──▶ domain
 - `application/ports.py`: `Clock`, `MetricsSink`, `SeenCache`, `EventStore`, `ConsumerStatusStore` (Fase 3), `OutboxStore`, `MessagePublisher`, `ReplayStore`, `OperationsStore`, `QueueDedup`, `EnrichmentStore`, `ResourceFetcher`, `NormalizationRule`. Ports de token, lease e WebSocket entram nas Fases 4 e 5.
 - `application/use_cases/`: `ProcessEventBatch`, `PublishOutbox`, `RequestReplay`, `ApplyReplay`, `CancelReplay`, `ReprocessEvent`, `RetryDlqItem`, `RetryConsumeDlq`, `EnrichEvent` (+ `RuleRegistry`).
 - `adapters/oracle/` (Fase 3, ADR-0013): `database.py` (pool Thick, `DedicatedSession` para a escrita do consumer, `PooledSession`, transação e barreira), `errors.py` (indisponível × duplicado × falha), `event_store.py`, `outbox_store.py`, `replay_store.py`, `operations_store.py`, `status_store.py`. Lease (Fase 4) e `EnrichmentStore` (Fase 9) ainda não.
-- Demais `adapters/`: `ohip_ws`, `ohip_rest`, `redis`, `rabbitmq`.
+- `adapters/ohip_rest/oauth.py` (Fase 4, ADR-0014): emissor do token OAuth. `adapters/oracle/lease_store.py`: lease do ADR-0008. `adapters/redis/`: dedup rápido, dedup do enricher, cache do token e snapshot de métricas.
+- `application/use_cases/token_provider.py` e `lease.py` (Fase 4): `TokenProvider` e `LeaseKeeper`.
+- Demais `adapters/`: `ohip_ws`, `rabbitmq`.
 - `entrypoints/`: `consumer.py`, `publisher.py`, `enricher.py`, `api/`, `admin/`.
 
 `import-linter` (ADR-0005): `domain`/`application` sem `oracledb`, `websockets`, `fastapi`, `flask`, `aio_pika`, `redis`, `httpx`; `entrypoints.admin` sem `adapters.oracle`, `adapters.redis`, `oracledb`, `redis`.

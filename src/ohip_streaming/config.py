@@ -269,15 +269,23 @@ class ConsumerSettings(BaseSettings):
     batch_max_events: int = Field(default=200, ge=1)
     batch_max_wait_ms: int = Field(default=200, ge=1)
     batch_max_retries: int = Field(default=5, ge=0)
-    lease_ttl_s: float = Field(default=30.0, ge=10)
-    lease_renew_interval_s: float = Field(default=10.0, gt=0)
     control_poll_interval_s: float = Field(default=5.0, gt=0)
+
+
+class LeaseSettings(BaseSettings):
+    """Lease com prazo e epoch no Oracle, comum a consumer e publisher (ADR-0008, ADR-0014)."""
+
+    model_config = _config("LEASE_")
+
+    ttl_s: float = Field(default=30.0, ge=10)
+    renew_interval_s: float = Field(default=10.0, gt=0)
+    acquire_jitter_s: float = Field(default=5.0, ge=0)  # espera extra aleatória entre tentativas
 
     @model_validator(mode="after")
     def _validate_lease(self) -> Self:
         # Pelo menos duas renovações cabem no prazo: uma falha isolada não derruba o lease.
-        if self.lease_renew_interval_s * 2 > self.lease_ttl_s:
-            raise ValueError("lease_renew_interval_s deve ser <= lease_ttl_s / 2")
+        if self.renew_interval_s * 2 > self.ttl_s:
+            raise ValueError("renew_interval_s deve ser <= ttl_s / 2")
         return self
 
 

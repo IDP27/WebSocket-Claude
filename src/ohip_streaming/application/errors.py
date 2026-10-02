@@ -67,3 +67,22 @@ class InvalidOperationError(ApplicationError):
     Na API vira 409."""
 
     code = "INVALID_STATE"
+
+
+class AuthRejectedError(ApplicationError):
+    """O OAuth recusou as credenciais (400/401/403). Não repetir em seguida: alerta e espera
+    a correção da configuração ou da assinatura no Developer Portal."""
+
+    code = "AUTH_REJECTED"
+
+
+class AuthUnavailableError(ApplicationError):
+    """Gateway do OAuth fora, lento, 429 ou 5xx. Repetir com backoff."""
+
+    code = "AUTH_UNAVAILABLE"
+
+
+class LeaseNotProvisionedError(ApplicationError):
+    """Não existe linha em OHIP_LEASE para o recurso: erro de provisionamento (ADR-0008)."""
+
+    code = "LEASE_NOT_PROVISIONED"

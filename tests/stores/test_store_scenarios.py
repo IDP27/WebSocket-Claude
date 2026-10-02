@@ -18,6 +18,7 @@ from tests.stores.backends import Backend
 
 from ohip_streaming.application.errors import (
     LeaseLostError,
+    LeaseNotProvisionedError,
     ReplayAlreadyPendingError,
     UnknownChainError,
 )
@@ -329,3 +330,33 @@ async def test_consumer_status_and_disconnect_clock(backend: Backend) -> None:
     assert snapshot.last_disconnect_at <= snapshot.db_now  # mesmo relógio (do banco)
     with pytest.raises(UnknownChainError):
         await backend.status.record_state("ZZNAOEXISTE", ConsumerState.STOPPED, "x")
+
+
+# ------------------------------------------------------------------ lease (ADR-0008)
+
+
+async def test_lease_has_one_owner_and_fences_writes(backend: Backend) -> None:
+    lease = f"consumer:{CHAIN}"
+    epoch = await backend.leases.acquire(lease, "vm1", 30)
+    assert epoch is not None
+    assert await backend.leases.acquire(lease, "vm2", 30) is None  # outro dono, prazo válido
+    assert await backend.leases.acquire(lease, "vm1", 30) == epoch + 1  # o próprio dono renova
+    epoch += 1
+    assert await backend.leases.renew(lease, "vm1", epoch, 30)
+    assert not await backend.leases.renew(lease, "vm1", epoch - 1, 30)  # epoch velho
+    assert not await backend.leases.renew(lease, "vm2", epoch, 30)
+
+    await persist(backend, event(1), lease_epoch=epoch)  # a barreira aceita o epoch do lease
+
+    await backend.leases.release(lease, "vm2", epoch)  # não é dono: nada muda
+    assert await backend.leases.acquire(lease, "vm2", 30) is None
+    await backend.leases.release(lease, "vm1", epoch)
+    new_epoch = await backend.leases.acquire(lease, "vm2", 30)
+    assert new_epoch == epoch + 1
+    with pytest.raises(LeaseLostError):
+        await persist(backend, event(2), lease_epoch=epoch)  # o antigo dono virou zumbi
+
+
+async def test_unprovisioned_lease(backend: Backend) -> None:
+    with pytest.raises(LeaseNotProvisionedError):
+        await backend.leases.acquire("consumer:ZZNAOEXISTE", "vm1", 30)

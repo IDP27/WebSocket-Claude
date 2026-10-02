@@ -10,7 +10,17 @@ import pytest
 
 from ohip_streaming.config import load_settings
 
-_PREFIXES = ("APP_", "OHIP_", "ORACLE_", "RABBITMQ_", "REDIS_", "CONSUMER_", "API_", "LOG_")
+_PREFIXES = (
+    "APP_",
+    "OHIP_",
+    "ORACLE_",
+    "RABBITMQ_",
+    "REDIS_",
+    "CONSUMER_",
+    "API_",
+    "LOG_",
+    "LEASE_",
+)
 
 
 @pytest.fixture(autouse=True)

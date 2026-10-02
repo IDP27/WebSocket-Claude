@@ -184,6 +184,51 @@ class ConsumerStatusStore(Protocol):
     async def disconnect_snapshot(self, chain_code: str) -> DisconnectSnapshot: ...
 
 
+# =============================================================== token OAuth e lease
+
+
+@dataclass(frozen=True, slots=True)
+class AccessToken:
+    value: str = field(repr=False)  # nunca em repr/log
+    expires_at: datetime  # UTC
+    # Vida total na emissão; viaja com o token pelo cache para todo processo calcular a
+    # mesma margem efetiva (ADR-0014). None = desconhecida (margem cheia).
+    lifetime_s: float | None = None
+
+
+class TokenIssuer(Protocol):
+    async def issue(self) -> AccessToken:
+        """POST /oauth/v1/tokens. Levanta ``AuthRejectedError`` ou ``AuthUnavailableError``."""
+        ...
+
+
+class TokenCache(Protocol):
+    """Cache compartilhado entre processos (Redis). Falhas aqui nunca impedem a emissão."""
+
+    async def get(self, key: str) -> AccessToken | None: ...
+
+    async def put(self, key: str, token: AccessToken, ttl_s: float) -> None: ...
+
+    async def delete(self, key: str) -> None: ...
+
+
+class LeaseStore(Protocol):
+    """OHIP_LEASE no Oracle, sempre com o relógio do banco (ADR-0008)."""
+
+    async def acquire(self, lease_name: str, owner: str, ttl_s: float) -> int | None:
+        """Novo epoch se o lease estava vencido ou já era nosso; None se tem outro dono.
+        Levanta ``LeaseNotProvisionedError`` se a linha não existe."""
+        ...
+
+    async def renew(self, lease_name: str, owner: str, epoch: int, ttl_s: float) -> bool:
+        """False se perdemos o lease (outro epoch ou outro dono)."""
+        ...
+
+    async def release(self, lease_name: str, owner: str, epoch: int) -> None:
+        """Vence o prazo agora, só se o lease ainda for nosso nesse epoch."""
+        ...
+
+
 # =============================================================== publisher: outbox
 
 

@@ -17,6 +17,7 @@ from ohip_streaming.config import (
     AuthMode,
     ConsumerSettings,
     Environment,
+    LeaseSettings,
     LogSettings,
     OhipSettings,
     OracleSettings,
@@ -237,12 +238,13 @@ def test_consumer_stall_timeout_below_server_pong_limit(monkeypatch: pytest.Monk
         ConsumerSettings()
 
 
-def test_consumer_lease_renewal_must_fit_twice_in_ttl(monkeypatch: pytest.MonkeyPatch) -> None:
-    assert ConsumerSettings().lease_ttl_s == 30
+def test_lease_renewal_must_fit_twice_in_ttl(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert LeaseSettings().ttl_s == 30
+    assert LeaseSettings().renew_interval_s == 10
 
-    set_env(monkeypatch, CONSUMER_LEASE_TTL_S="30", CONSUMER_LEASE_RENEW_INTERVAL_S="20")
-    with pytest.raises(ValidationError, match="lease_renew_interval_s"):
-        ConsumerSettings()
+    set_env(monkeypatch, LEASE_TTL_S="30", LEASE_RENEW_INTERVAL_S="20")
+    with pytest.raises(ValidationError, match="renew_interval_s"):
+        LeaseSettings()
 
 
 def test_api_service_tokens_accept_only_sha256(monkeypatch: pytest.MonkeyPatch) -> None:
