@@ -7,10 +7,12 @@
   e ``FAILED`` no bruto, ``message_id`` marcado e ``ACK``. Nenhuma mensagem é perdida: se nem a
   DLQ puder ser gravada, a mensagem volta para a fila.
 - **Disjuntor**: ``systemic_failure_threshold`` mensagens seguidas esgotando as tentativas com
-  a mesma falha (estágio + classe), sem sucesso no meio, é falha do sistema (403 da REST por
-  falta de assinatura, tabela sem grant, regra com bug), não das mensagens: alerta crítico e
-  as seguintes com essa falha voltam para a fila com backoff, em vez de esvaziá-la na DLQ.
-  Um sucesso fecha o disjuntor.
+  a mesma falha (estágio, com/sem regra, classe), sem sucesso no meio, é falha do sistema (403
+  da REST por falta de assinatura, tabela sem grant, regra com bug), não das mensagens:
+  alerta crítico e as seguintes com essa falha voltam para a fila com backoff já na primeira
+  tentativa, em vez de esvaziá-la na DLQ. Só fecha com sucesso que exercite o mesmo caminho:
+  ``NORMALIZED``/``ENRICHED`` sempre; ``UNMAPPED`` só se a falha foi sem regra (um evento sem
+  regra não prova que a regra voltou a funcionar); ``DUPLICATE``/``NOT_FOUND`` nunca.
 - Erro inesperado (bug nosso): alerta, backoff e ``REQUEUE``. Nunca derruba o processo, que
   recebe a mesma mensagem ao voltar e cairia de novo (laço de reinício).
 - Log e DLQ levam só ``EnrichmentFailedError.detail`` (sem dados pessoais).
@@ -75,8 +77,9 @@ class EnricherService:
         self._options = options
         self._stop = asyncio.Event()
         self._transient_failures = 0
-        # Disjuntor: assinatura (estágio, classe) da última falha esgotada e quantas seguidas.
-        self._failure_signature: tuple[str, str] | None = None
+        # Disjuntor: assinatura (estágio, com regra?, classe) da última falha esgotada e
+        # quantas seguidas.
+        self._failure_signature: tuple[str, bool, str] | None = None
         self._same_failures = 0
 
     @property
@@ -109,7 +112,8 @@ class EnricherService:
             except (StoreUnavailableError, ResourceUnavailableError) as exc:
                 return await self._transient(exc)
             except EnrichmentFailedError as exc:
-                if attempt < self._options.max_attempts:
+                # Disjuntor aberto para esta falha: sem gastar as outras tentativas.
+                if attempt < self._options.max_attempts and not self._breaker_open(exc):
                     if self._stop.is_set():
                         return Disposition.REQUEUE  # sem DLQ antes da hora: outro processo tenta
                     log.warning(
@@ -126,8 +130,7 @@ class EnricherService:
                     return await self._systemic(exc)
                 return await self._to_dlq(message, exc)
             self._transient_failures = 0
-            if outcome is not EnrichOutcome.DUPLICATE:  # duplicado não exercita nada
-                self._close_breaker()
+            self._on_success(outcome)
             self._metrics.increment("ohip_enricher_messages_total", outcome=outcome.value)
             return Disposition.ACK
 
@@ -161,8 +164,18 @@ class EnricherService:
         )
         return Disposition.ACK
 
+    @staticmethod
+    def _signature(failure: EnrichmentFailedError) -> tuple[str, bool, str]:
+        return failure.stage, failure.has_rule, type(failure.cause).__name__
+
+    def _breaker_open(self, failure: EnrichmentFailedError) -> bool:
+        return (
+            self._signature(failure) == self._failure_signature
+            and self._same_failures >= self._options.systemic_failure_threshold
+        )
+
     def _is_systemic(self, failure: EnrichmentFailedError) -> bool:
-        signature = (failure.stage, type(failure.cause).__name__)
+        signature = self._signature(failure)
         if signature == self._failure_signature:
             self._same_failures += 1
         else:
@@ -170,7 +183,7 @@ class EnricherService:
         return self._same_failures >= self._options.systemic_failure_threshold
 
     async def _systemic(self, failure: EnrichmentFailedError) -> Disposition:
-        stage, error_class = self._failure_signature or (failure.stage, "?")
+        stage, _, error_class = self._signature(failure)
         self._metrics.increment("ohip_enricher_systemic_failures_total", stage=stage)
         if self._same_failures == self._options.systemic_failure_threshold:
             log.critical(
@@ -181,6 +194,15 @@ class EnricherService:
                 error=str(failure),
             )
         return await self._transient(failure)
+
+    def _on_success(self, outcome: EnrichOutcome) -> None:
+        signature = self._failure_signature
+        if signature is None:
+            return
+        rule_path = outcome in (EnrichOutcome.NORMALIZED, EnrichOutcome.ENRICHED)
+        no_rule_path = outcome is EnrichOutcome.UNMAPPED and not signature[1]
+        if rule_path or no_rule_path:  # DUPLICATE/NOT_FOUND não exercitam o caminho
+            self._close_breaker()
 
     def _close_breaker(self) -> None:
         if self._same_failures >= self._options.systemic_failure_threshold:

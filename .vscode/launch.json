@@ -1,6 +1,6 @@
 {
-  // Depuração. Consumer e publisher leem o .env da raiz (copie do .env.example; fora do git).
-  // Use só sandbox OHIP e Oracle/RabbitMQ/Redis de teste. O painel entra na Fase 8.
+  // Depuração. Os processos leem o .env da raiz (copie do .env.example; fora do git).
+  // Use só sandbox OHIP e Oracle/RabbitMQ/Redis de teste.
   "version": "0.2.0",
   "configurations": [
     {
@@ -49,6 +49,31 @@
       "type": "debugpy",
       "request": "launch",
       "module": "ohip_streaming.entrypoints.publisher",
+      "envFile": "${workspaceFolder}/.env",
+      "env": { "PYTHONPATH": "src" },
+      "cwd": "${workspaceFolder}",
+      "justMyCode": true
+    },
+    {
+      // Sem regras até a Q-1: todo evento termina UNMAPPED. REST só com ENRICHER_REST_ENABLED=true.
+      "name": "ohip-enricher (Oracle/RabbitMQ/Redis de teste)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "ohip_streaming.entrypoints.enricher",
+      "envFile": "${workspaceFolder}/.env",
+      "env": { "PYTHONPATH": "src" },
+      "cwd": "${workspaceFolder}",
+      "justMyCode": true
+    },
+    {
+      // Servidor de desenvolvimento do Flask (em produção: Gunicorn atrás do Nginx, ADR-0018).
+      // Precisa da ohip-api rodando. Sem Nginx, envie o header X-Forwarded-User (e
+      // X-Forwarded-Groups) por extensão do navegador ou curl; sem ele, 401.
+      "name": "ohip-admin (painel, API local)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "flask",
+      "args": ["--app", "ohip_streaming.entrypoints.admin.app:create_app", "run", "--host", "127.0.0.1", "--port", "8081", "--no-reload"],
       "envFile": "${workspaceFolder}/.env",
       "env": { "PYTHONPATH": "src" },
       "cwd": "${workspaceFolder}",

@@ -86,6 +86,11 @@ class BrokenDedup(FakeQueueDedup):
 
 
 async def seeded() -> tuple[InMemoryDatabase, int]:
+    db, (raw_id,) = await seeded_many(frame("100"))
+    return db, raw_id
+
+
+async def seeded_many(*frames: str) -> tuple[InMemoryDatabase, list[int]]:
     db = InMemoryDatabase(clock=FakeClock())
     db.provision_chain(CHAIN)
     epoch = db.acquire(f"consumer:{CHAIN}")
@@ -97,9 +102,9 @@ async def seeded() -> tuple[InMemoryDatabase, int]:
         options=BatchOptions(),
     ).execute(
         ConsumerContext(CHAIN, SUBSCRIPTION_ID, epoch, ZoneInfo("UTC")),
-        [IncomingMessage(frame("100"), db.clock.now())],
+        [IncomingMessage(f, db.clock.now()) for f in frames],
     )
-    return db, next(iter(db.raw))
+    return db, list(db.raw)
 
 
 def service(
@@ -324,6 +329,60 @@ async def test_duplicates_do_not_close_the_breaker() -> None:
     assert await svc.handle(message(raw_id, "a")) is Disposition.ACK
     assert await svc.handle(message(raw_id, "ja-feito")) is Disposition.ACK  # duplicado
     assert await svc.handle(message(raw_id, "b")) is Disposition.REQUEUE
+
+
+async def test_unmapped_events_do_not_close_a_rule_breaker() -> None:
+    # Após a Q-1, com ENRICHER_BINDINGS=ohip.#: eventos sem regra no meio das reservas.
+    db, (reservation, profile) = await seeded_many(
+        frame("100"), frame("101", event_name="NEW PROFILE", module_name="PROFILE")
+    )
+    fetcher = FakeFetcher()
+    fetcher.errors = [ResourceRejectedError("HTTP 403")] * 3
+    svc, _, _ = service(
+        db,
+        [Rule(needs_resource=True)],
+        fetcher=fetcher,
+        max_attempts=1,
+        systemic_failure_threshold=2,
+    )
+    assert await svc.handle(message(reservation, "a")) is Disposition.ACK  # 1ª: DLQ
+    assert await svc.handle(message(profile, "b")) is Disposition.ACK  # UNMAPPED
+    assert db.raw[profile].status is ProcessingStatus.UNMAPPED
+    assert await svc.handle(message(reservation, "c")) is Disposition.REQUEUE  # abriu
+    assert len(db.dlq) == 1
+
+
+async def test_unmapped_closes_a_breaker_opened_without_rule() -> None:
+    # Antes da Q-1 (sem regras): grant faltando no ohip_event_raw, depois corrigido.
+    db, raw_id = await seeded()
+    db.fail_apply = [StoreOperationError("ORA-01031: privilégios insuficientes")] * 2
+    svc, _, _ = service(db, max_attempts=1, systemic_failure_threshold=2)
+    assert await svc.handle(message(raw_id, "a")) is Disposition.ACK  # DLQ
+    assert await svc.handle(message(raw_id, "b")) is Disposition.REQUEUE  # abriu
+    assert await svc.handle(message(raw_id, "b")) is Disposition.ACK  # UNMAPPED: fechou
+    db.fail_apply = [StoreOperationError("ORA-01031")]
+    assert await svc.handle(message(raw_id, "c")) is Disposition.ACK  # contagem recomeçou
+    assert len(db.dlq) == 2
+
+
+async def test_open_breaker_skips_the_remaining_attempts() -> None:
+    db, raw_id = await seeded()
+    fetcher = FakeFetcher()
+    fetcher.errors = [ResourceRejectedError("HTTP 403")] * 10
+    svc, _, _ = service(
+        db,
+        [Rule(needs_resource=True)],
+        fetcher=fetcher,
+        max_attempts=3,
+        retry_delay_s=2,
+        systemic_failure_threshold=2,
+        transient_backoff_initial_s=5,
+    )
+    assert await svc.handle(message(raw_id, "a")) is Disposition.ACK  # 3 tentativas, DLQ
+    assert await svc.handle(message(raw_id, "b")) is Disposition.REQUEUE  # 3 tentativas, abriu
+    assert await svc.handle(message(raw_id, "c")) is Disposition.REQUEUE  # aberto: 1 tentativa
+    assert len(fetcher.calls) == 7
+    assert db.clock.sleeps == [2, 2, 2, 2, 5, 10]
 
 
 # ------------------------------------------------------------ erro inesperado (bug nosso)

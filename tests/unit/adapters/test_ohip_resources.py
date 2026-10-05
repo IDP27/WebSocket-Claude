@@ -200,7 +200,10 @@ async def test_repeated_auth_rejections_raise_a_critical_alert(
     out = capsys.readouterr().out
     assert "ohip_rest_credenciais_recusadas" in out
     assert "app-key-secreta" not in out
-    assert f._metrics.total("ohip_rest_auth_rejected_total") == 3  # type: ignore[attr-defined]
+    with pytest.raises(ResourceUnavailableError):  # 4ª: só aviso e métrica, crítico não repete
+        await f.fetch("C1", "profile", "H1", "9")
+    assert "ohip_rest_credenciais_recusadas" not in capsys.readouterr().out
+    assert f._metrics.total("ohip_rest_auth_rejected_total") == 4  # type: ignore[attr-defined]
 
     tokens.error = None  # assinatura corrigida no Developer Portal: a contagem zera
     assert await f.fetch("C1", "profile", "H1", "9") == {}

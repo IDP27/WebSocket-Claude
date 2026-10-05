@@ -2,9 +2,9 @@
 
 Consumidor de eventos do OPERA Cloud pela **OHIP Streaming API** (WebSocket + GraphQL). Grava cada evento no Oracle 11g sem perda nem duplicidade e publica no RabbitMQ via outbox para BI, integrações e n8n.
 
-> **Status: Fases 0 a 8 concluídas** (concepção, esqueleto, domínio e casos de uso, adapter Oracle, token OAuth + lease + Redis, consumer WebSocket, publisher outbox, API de controle FastAPI e painel Flask). Próxima: Fase 9 (enricher). Pendentes de ambiente: Oracle 11g de teste (Q-17), sandbox OHIP e RabbitMQ de teste. Veja [docs/PLAN.md](docs/PLAN.md).
+> **Status: Fases 0 a 9 concluídas** (concepção, esqueleto, domínio e casos de uso, adapter Oracle, token OAuth + lease + Redis, consumer WebSocket, publisher outbox, API de controle FastAPI, painel Flask e esqueleto do enricher, sem regras até a Q-1). Próxima: Fase 10 (operação e carga). Pendentes: respostas da Q-1/Q-2 (regras do enricher), Oracle 11g de teste (Q-17), sandbox OHIP e RabbitMQ de teste. Veja [docs/PLAN.md](docs/PLAN.md).
 >
-> **Processos**: `ohip-consumer` (WebSocket OHIP → Oracle), `ohip-publisher` (outbox → RabbitMQ) `ohip-api` (API de controle, [docs/API.md](docs/API.md)) e `ohip-admin` (painel em `/admin`, [docs/UI.md](docs/UI.md)), scripts do `pyproject.toml`.
+> **Processos**: `ohip-consumer` (WebSocket OHIP → Oracle), `ohip-publisher` (outbox → RabbitMQ), `ohip-enricher` (fila → normalização no Oracle; sem regras até a Q-1, [ADR-0019](docs/adr/0019-enricher.md)), `ohip-api` (API de controle, [docs/API.md](docs/API.md)) e `ohip-admin` (painel em `/admin`, [docs/UI.md](docs/UI.md)), scripts do `pyproject.toml`.
 >
 > **Endpoints**: a API de controle está em [docs/API.md](docs/API.md) (OpenAPI em `/docs` fora de produção); o painel fica em `/admin` atrás do Nginx (login no Nginx/SSO, Q-5). As APIs da Oracle que o projeto chama estão em [postman/](postman/README.md).
 
@@ -26,7 +26,7 @@ Abra `ohip-streaming.code-workspace` e instale as extensões recomendadas (aviso
 
 - **Terminal → Run Task**: `make check` (também em Cmd+Shift+B), testes, lint, mypy, camadas, integração com Oracle de teste, integridade das specs da Oracle e cobertura em HTML.
 - **Testing** (ícone de frasco): a suíte sem infraestrutura. Os testes de Oracle real aparecem como pulados até existir schema de teste.
-- **Run and Debug**: `pytest: arquivo atual`, `pytest: suíte sem infraestrutura`, `ohip-consumer (sandbox)`, `ohip-publisher (RabbitMQ de teste)` e `ohip-api (Oracle/Redis de teste)`. Os processos leem o `.env` da raiz (copie do `.env.example`; o arquivo fica fora do git) e só devem apontar para sandbox OHIP e infraestrutura de teste.
+- **Run and Debug**: `pytest: arquivo atual`, `pytest: suíte sem infraestrutura`, `ohip-consumer (sandbox)`, `ohip-publisher (RabbitMQ de teste)`, `ohip-enricher (Oracle/RabbitMQ/Redis de teste)`, `ohip-api (Oracle/Redis de teste)` e `ohip-admin (painel, API local)`. Os processos leem o `.env` da raiz (copie do `.env.example`; o arquivo fica fora do git) e só devem apontar para sandbox OHIP e infraestrutura de teste. O painel precisa da API rodando e, sem Nginx, do header `X-Forwarded-User` em cada requisição (extensão do navegador ou `curl`).
 - **APIs da Oracle**: a extensão Postman importa `postman/ohip-streaming.postman_collection.json` e o environment-modelo (só sandbox; veja [postman/README.md](postman/README.md)).
 
 **macOS — "No module named ohip_streaming" fora da raiz:** se o arquivo `.venv/lib/python3.*/site-packages/ohip_streaming.pth` ganhar a flag `hidden`, o Python 3.12+ o ignora. Corrija com `chflags nohidden .venv/lib/python3.*/site-packages/*.pth`. O `Makefile` já define `PYTHONPATH=src` para não depender disso.

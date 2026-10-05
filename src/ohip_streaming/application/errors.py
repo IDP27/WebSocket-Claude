@@ -145,11 +145,14 @@ class EnrichmentFailedError(ApplicationError):
 
     ``detail`` é o que pode ir para log e DLQ: o texto dos nossos erros (``ApplicationError``,
     escritos sem dados pessoais) ou, para qualquer outra exceção (ex.: ``KeyError`` de uma
-    regra com o valor do campo), só o aviso de omissão."""
+    regra com o valor do campo), só o aviso de omissão. ``has_rule``: a falha aconteceu no
+    caminho de uma regra (o disjuntor só fecha com sucesso que exercite o mesmo caminho)."""
 
     code = "ENRICHMENT_FAILED"
 
-    def __init__(self, raw_event_id: int, stage: str, cause: BaseException) -> None:
+    def __init__(
+        self, raw_event_id: int, stage: str, cause: BaseException, *, has_rule: bool = False
+    ) -> None:
         detail = (
             (str(cause) or cause.code) if isinstance(cause, ApplicationError) else OMITTED_DETAIL
         )
@@ -158,6 +161,7 @@ class EnrichmentFailedError(ApplicationError):
         self.stage = stage
         self.cause = cause
         self.detail = detail
+        self.has_rule = has_rule
 
 
 class HandshakeRejectedError(ApplicationError):

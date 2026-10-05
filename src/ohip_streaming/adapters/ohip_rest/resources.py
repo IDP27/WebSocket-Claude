@@ -10,8 +10,9 @@ Chamadas e headers conferidos nas specs oficiais (docs/OHIP_APIS.md §4, ADR-001
   transitória; 403 e outros 4xx → falha da mensagem.
 - Rate limit do lado do cliente (balde de fichas) e cache no Redis (``ohip:rest:*``).
 - OAuth recusando as credenciais segue transitória (a assinatura pode ser corrigida no
-  Developer Portal sem reiniciar), mas ``auth_rejected_alert`` recusas seguidas geram alerta
-  crítico e ``ohip_rest_auth_rejected_total``; o backoff do serviço limita os pedidos de token.
+  Developer Portal sem reiniciar), mas a ``auth_rejected_alert``-ésima recusa seguida gera
+  alerta crítico (uma vez) e toda recusa conta em ``ohip_rest_auth_rejected_total``; o backoff
+  do serviço limita os pedidos de token.
 - Nunca loga token, app key nem o caminho (tem o ``primaryKey``); loga o ``x-request-id``.
 """
 
@@ -204,10 +205,15 @@ class OhipResourceFetcher:
     def _auth_rejected(self, reason: str) -> None:
         self._auth_rejections += 1
         self._metrics.increment("ohip_rest_auth_rejected_total")
-        if self._auth_rejections >= self._auth_rejected_alert:
-            # Exige ação humana: credenciais (.env) ou assinatura no Developer Portal.
+        if self._auth_rejections == self._auth_rejected_alert:
+            # Exige ação humana: credenciais (.env) ou assinatura no Developer Portal. Crítico
+            # só ao cruzar o limite; daí em diante, a métrica e o aviso de cada recusa.
             log.critical(
                 "ohip_rest_credenciais_recusadas", rejections=self._auth_rejections, reason=reason
+            )
+        else:
+            log.warning(
+                "ohip_rest_credencial_recusada", rejections=self._auth_rejections, reason=reason
             )
 
 

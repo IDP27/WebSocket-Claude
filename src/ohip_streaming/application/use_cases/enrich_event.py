@@ -100,7 +100,9 @@ class EnrichEvent:
             stage = (
                 DlqStage.ENRICH if rule is not None and rule.needs_resource else DlqStage.NORMALIZE
             )
-            raise EnrichmentFailedError(raw_event_id, stage.value, exc) from exc
+            raise EnrichmentFailedError(
+                raw_event_id, stage.value, exc, has_rule=rule is not None
+            ) from exc
 
     async def _apply(
         self, message: InboundMessage, stored: StoredEvent, rule: NormalizationRule | None
