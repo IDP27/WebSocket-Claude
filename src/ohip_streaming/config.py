@@ -227,6 +227,10 @@ class RabbitMQSettings(BaseSettings):
     unrouted_exchange: str = "ohip.events.unrouted"
     reprocess_exchange: str = "ohip.reprocess"
     enricher_queue: str = "ohip.enricher"
+    unrouted_queue: str = "ohip.unrouted"
+    unrouted_max_length: int = Field(default=100_000, ge=1)  # mais antigas descartadas
+    connect_timeout_s: float = Field(default=10.0, gt=0)
+    confirm_timeout_s: float = Field(default=30.0, gt=0)  # sem confirm: resultado desconhecido
     broker_max_message_bytes: int = Field(default=16 * MIB, ge=1 * MIB)
     publish_max_attempts: int = Field(default=10, ge=1)
     channel_fail_attribution: int = Field(default=3, ge=1)
@@ -237,6 +241,18 @@ class RabbitMQSettings(BaseSettings):
         if not value.get_secret_value().startswith(("amqp://", "amqps://")):
             raise ValueError("RABBITMQ_URL deve começar com amqp:// ou amqps://")
         return value
+
+
+class PublisherSettings(BaseSettings):
+    """Laço do publisher (ARCHITECTURE §4.2, ADR-0016)."""
+
+    model_config = _config("PUBLISHER_")
+
+    poll_interval_s: float = Field(default=1.0, gt=0)  # sem nada a publicar
+    batch_limit: int = Field(default=100, ge=1)  # linhas lidas da cabeça por chain e rodada
+    max_parallel_chains: int = Field(default=8, ge=1)
+    broker_backoff_initial_s: float = Field(default=1.0, gt=0)
+    broker_backoff_max_s: float = Field(default=60.0, gt=0)
 
 
 class RedisSettings(BaseSettings):

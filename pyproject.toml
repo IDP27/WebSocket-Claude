@@ -21,6 +21,7 @@ dependencies = [
 
 [project.scripts]
 ohip-consumer = "ohip_streaming.entrypoints.consumer:main"
+ohip-publisher = "ohip_streaming.entrypoints.publisher:main"
 
 [tool.poetry]
 packages = [{ include = "ohip_streaming", from = "src" }]

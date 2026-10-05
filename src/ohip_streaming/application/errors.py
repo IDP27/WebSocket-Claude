@@ -26,6 +26,13 @@ class BatchFailedError(ApplicationError):
     code = "BATCH_FAILED"
 
 
+class BrokerMisconfiguredError(ApplicationError):
+    """A topologia no broker diverge da nossa (argumentos diferentes numa declaração).
+    Exige ação humana; tentar de novo não resolve."""
+
+    code = "BROKER_MISCONFIGURED"
+
+
 class StoreOperationError(ApplicationError):
     """O banco respondeu e recusou uma operação que não é o lote do consumer (ex.: marcação da
     outbox, pedido de replay). Nada foi gravado."""

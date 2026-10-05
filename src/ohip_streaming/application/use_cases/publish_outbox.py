@@ -96,6 +96,7 @@ class PublishOutbox:
             message_id=row.message_id,
             body=body,
             headers={"x-schema-version": row.schema_version},
+            lane=row.chain_code,
         )
         try:
             outcome = await self._publisher.publish(message)

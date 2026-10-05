@@ -13,6 +13,7 @@ from ohip_streaming.application.use_cases.consume_chain import ChainConsumer
 from ohip_streaming.config import load_settings
 from ohip_streaming.domain.messages import ExchangeKind
 from ohip_streaming.entrypoints import consumer as entry
+from ohip_streaming.entrypoints.common import instance_id
 
 ENV = {
     **OHIP_MIN_ENV,
@@ -51,8 +52,8 @@ def test_options_follow_the_settings(config: entry.ConsumerConfig) -> None:
 
 
 def test_instance_id_is_unique() -> None:
-    assert entry.instance_id() != entry.instance_id()
-    assert entry.instance_id().count(":") == 2
+    assert instance_id() != instance_id()
+    assert instance_id().count(":") == 2
 
 
 async def test_compose_builds_and_closes_everything(

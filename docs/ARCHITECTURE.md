@@ -163,7 +163,7 @@ SELECT id, exchange_name, routing_key, message, attempts, next_attempt_at
 
 ### 4.4 Reprocessamento
 
-- `POST /events/{id}/reprocess` e o retry de DLQ `NORMALIZE`/`ENRICH` **inserem uma linha nova na outbox** destinada ao exchange **`ohip.reprocess`** (direct, ligado só à fila do enricher; coluna `exchange_name` na outbox). Bindings `ohip.#` de terceiros no `ohip.events` não recebem reprocessamentos. Nada é publicado fora da outbox.
+- `POST /events/{id}/reprocess` e o retry de DLQ `NORMALIZE`/`ENRICH` **inserem uma linha nova na outbox** destinada ao exchange **`ohip.reprocess`** (fanout, ADR-0016: a routing key varia; ligado só à fila do enricher; coluna `exchange_name` na outbox). Bindings `ohip.#` de terceiros no `ohip.events` não recebem reprocessamentos. Nada é publicado fora da outbox.
 - O retry de DLQ `PUBLISH` cria uma **linha nova** (copiando a mensagem) no fim da fila; a linha antiga fica `FAILED`, para não virar cabeça e travar a chain.
 - O retry de DLQ `CONSUME` **não é feito pela API** (seria um segundo escritor da chain): a API marca `retry_requested_at` no item; o consumer da chain (`RetryConsumeDlq`) relê o `raw_message` — frame `next` original ou só o `newEvent` (bisseção e erro por linha guardam o `newEvent` já sem cartão) — e grava o evento na sua própria transação com barreira de epoch, **sem mexer no offset**. Evento gravado ou já existente → item `RETRIED` na mesma transação; ainda inválido ou recusado pelo banco → item continua aberto com o motivo novo, `attempts` + 1 e o pedido limpo (pode ser pedido de novo); um item recusado não interrompe os demais pedidos. Nenhum item novo de DLQ é criado pelo retry.
 - Toda operação de retry é **uma transação condicionada a `resolution IS NULL`** (e, no `CONSUME`, a `retry_requested_at IS NULL`): dois cliques ou duas réplicas da API não duplicam linhas na outbox; o segundo recebe 409.
@@ -294,7 +294,7 @@ entrypoints ──▶ application ──▶ domain
 - `adapters/ohip_rest/oauth.py` (Fase 4, ADR-0014): emissor do token OAuth. `adapters/oracle/lease_store.py`: lease do ADR-0008. `adapters/redis/`: dedup rápido, dedup do enricher, cache do token e snapshot de métricas.
 - `application/use_cases/token_provider.py` e `lease.py` (Fase 4): `TokenProvider` e `LeaseKeeper`.
 - Fase 5 (ADR-0015): `domain/protocol.py` (mensagens no formato do guia), `application/intake.py` (fila interna), `application/use_cases/consume_chain.py` (`ChainConsumer` e sessão), `adapters/ohip_ws/client.py` (`websockets`), `entrypoints/consumer.py` (processo `ohip-consumer`).
-- Demais `adapters/`: `rabbitmq`.
+- Fase 6 (ADR-0016): `adapters/rabbitmq/publisher.py` (confirms e topologia), `application/use_cases/publisher_service.py` (laço com lease), `entrypoints/publisher.py` (processo `ohip-publisher`) e `entrypoints/common.py`.
 - `entrypoints/`: `consumer.py`, `publisher.py`, `enricher.py`, `api/`, `admin/`.
 
 `import-linter` (ADR-0005): `domain`/`application` sem `oracledb`, `websockets`, `fastapi`, `flask`, `aio_pika`, `redis`, `httpx`; `entrypoints.admin` sem `adapters.oracle`, `adapters.redis`, `oracledb`, `redis`.

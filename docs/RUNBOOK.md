@@ -34,6 +34,15 @@ Os cenários de `tests/stores/` rodam no fake e, com estas variáveis, num Oracl
 - Estado em `OHIP_CONSUMER_STATUS`: `SUBSCRIBED` = recebendo; `WAITING` = aguardando reconexão; `DRAINING` = encerrando a assinatura; `STOPPED` = **ação humana** (4403/4406 ou mensagem grande demais repetida); o processo fica parado até ser reiniciado depois da correção.
 - Logs úteis: `ohip_assinado` (subscription_id, offset: informe ao suporte Oracle), `conexao_envenenada` (fila travada ou banco fora: reconecta pelo offset confirmado), `ohip_sem_prova_de_vida`, `ohip_assinatura_encerrada` (frame `error` do servidor, D-10), `ws_handshake_recusado` (HTTP 400: hash da app key ou URL), `consumer_alerta`/`consumer_parado`.
 
+## Publisher (`ohip-publisher`)
+
+- Um ativo por ambiente (lease `publisher`); uma instância extra fica esperando o lease. Comando: `ohip-publisher`.
+- Topologia nossa (declarada na partida): `ohip.events` (topic, com alternate exchange), `ohip.events.unrouted` → fila `ohip.unrouted` (limite `RABBITMQ_UNROUTED_MAX_LENGTH`, descarta as mais antigas), `ohip.reprocess` (fanout) → `ohip.enricher`. Cada time declara a própria fila e a binding em `ohip.events` (Q-13).
+- Mensagens em `ohip.unrouted`: alguém publica um evento que nenhuma fila assinou. Crie a binding certa ou confirme que o evento pode ser ignorado.
+- Saída com código 2 e `publisher_topologia_divergente`: um exchange ou fila nossa já existe no broker com outros argumentos, ou o usuário não tem permissão de declarar. Corrija no broker (ou ajuste a configuração) antes de reiniciar. A unit do systemd usa `RestartPreventExitStatus=2` para não reiniciar em laço.
+- `broker_indisponivel` repetido: broker fora ou rede; nenhuma tentativa é gasta e nada vai para a DLQ, por mais que dure. Linhas `FAILED` + DLQ `PUBLISH` só por `nack` ou mensagem grande demais; reprocesse pela API.
+- Testes contra um RabbitMQ de teste (vhost descartável): `TEST_RABBITMQ_URL` + `TEST_RABBITMQ_DISPOSABLE=sim` e `make test-integration`.
+
 ## Hash da app key
 
 ```bash

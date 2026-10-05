@@ -204,3 +204,12 @@ async def test_channel_counter_restarts_after_the_row_is_sent() -> None:
     assert (await h.publish()).sent == 1
     assert h.use_case._channel_failures == {}
     assert h.db.outbox[row].attempts == 0
+
+
+async def test_each_chain_publishes_in_its_own_lane() -> None:
+    h = Harness()
+    h.add("C1", "u1")
+    h.add("C2", "u2")
+    await h.publish("C1")
+    await h.publish("C2")
+    assert [(m.message_id, m.lane) for m in h.publisher.published] == [("u1", "C1"), ("u2", "C2")]

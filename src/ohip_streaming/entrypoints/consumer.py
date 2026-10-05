@@ -12,10 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import os
 import signal
-import socket
-import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -64,6 +61,7 @@ from ohip_streaming.config import (
 )
 from ohip_streaming.domain.connection import ReconnectPolicy
 from ohip_streaming.domain.messages import ExchangeKind
+from ohip_streaming.entrypoints.common import instance_id
 from ohip_streaming.logging import configure_logging, get_logger
 
 log = get_logger(__name__)
@@ -93,10 +91,6 @@ class ConsumerConfig:
             lease=load_settings(LeaseSettings),
             rabbitmq=load_settings(RabbitMQSettings),
         )
-
-
-def instance_id() -> str:
-    return f"{socket.gethostname()}:{os.getpid()}:{uuid.uuid4().hex[:8]}"
 
 
 def consumer_options(config: ConsumerConfig, instance: str) -> ConsumerOptions:

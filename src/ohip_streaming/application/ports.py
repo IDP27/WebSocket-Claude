@@ -300,6 +300,9 @@ class OutgoingMessage:
     message_id: str
     body: bytes
     headers: Mapping[str, Any] = field(default_factory=dict)
+    # Faixa de publicação (a chain): o adapter usa um canal por faixa, para a queda de canal
+    # causada pela mensagem de uma chain não ser atribuída às outras (ADR-0011 nº 7).
+    lane: str = ""
 
 
 class MessagePublisher(Protocol):
