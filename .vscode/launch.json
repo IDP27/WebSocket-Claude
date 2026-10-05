@@ -1,5 +1,6 @@
 {
-  // Depuração. Os entrypoints (consumer, publisher, API, painel) entram aqui nas Fases 5 a 8.
+  // Depuração. Consumer e publisher leem o .env da raiz (copie do .env.example; fora do git).
+  // Use só sandbox OHIP e Oracle/RabbitMQ/Redis de teste. API e painel entram nas Fases 7 e 8.
   "version": "0.2.0",
   "configurations": [
     {
@@ -21,6 +22,26 @@
       "envFile": "${workspaceFolder}/.vscode/test.env",
       "cwd": "${workspaceFolder}",
       "justMyCode": false
+    },
+    {
+      "name": "ohip-consumer (sandbox)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "ohip_streaming.entrypoints.consumer",
+      "envFile": "${workspaceFolder}/.env",
+      "env": { "PYTHONPATH": "src" },
+      "cwd": "${workspaceFolder}",
+      "justMyCode": true
+    },
+    {
+      "name": "ohip-publisher (RabbitMQ de teste)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "ohip_streaming.entrypoints.publisher",
+      "envFile": "${workspaceFolder}/.env",
+      "env": { "PYTHONPATH": "src" },
+      "cwd": "${workspaceFolder}",
+      "justMyCode": true
     }
   ]
 }

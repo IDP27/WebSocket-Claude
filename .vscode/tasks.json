@@ -22,8 +22,8 @@
     { "label": "make typecheck (mypy)", "type": "shell", "command": "make typecheck", "problemMatcher": [] },
     { "label": "make imports (camadas)", "type": "shell", "command": "make imports", "problemMatcher": [] },
     {
-      "label": "make test-integration (Oracle de teste)",
-      "detail": "Precisa de TEST_ORACLE_* e TEST_ORACLE_DISPOSABLE_SCHEMA=sim (RUNBOOK). Nunca homologação/produção.",
+      "label": "make test-integration (Oracle/RabbitMQ/Redis de teste)",
+      "detail": "Precisa de TEST_*_URL/TEST_ORACLE_* e das flags TEST_*_DISPOSABLE=sim (RUNBOOK). Nunca homologação/produção.",
       "type": "shell",
       "command": "make test-integration",
       "problemMatcher": []
