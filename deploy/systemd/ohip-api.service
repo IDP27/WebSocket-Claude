@@ -1,0 +1,39 @@
+# API de controle (ADR-0017): Uvicorn em 127.0.0.1:8080, atrás do Nginx.
+[Unit]
+Description=OHIP Streaming - API de controle
+Documentation=file:///opt/ohip-streaming/docs/API.md
+After=network-online.target
+Wants=network-online.target
+PartOf=ohip-streaming.target
+
+[Service]
+Type=exec
+User=ohip
+Group=ohip
+WorkingDirectory=/opt/ohip-streaming
+EnvironmentFile=/etc/ohip/common.env
+EnvironmentFile=/etc/ohip/api.env
+ExecStart=/opt/ohip-streaming/.venv/bin/ohip-api
+Restart=always
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=30
+# Endurecimento (ADR-0020 §4). O Instant Client grava trace em $HOME (StateDirectory).
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+UMask=0077
+StateDirectory=ohip
+Environment=HOME=/var/lib/ohip
+
+[Install]
+WantedBy=ohip-streaming.target

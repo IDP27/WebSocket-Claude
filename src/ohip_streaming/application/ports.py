@@ -164,11 +164,38 @@ class DisconnectSnapshot:
     last_state: ConsumerState | None
 
 
-class ConsumerStatusStore(Protocol):
-    """OHIP_CONSUMER_STATUS. Os campos de heartbeat e RTT entram na Fase 5."""
+@dataclass(frozen=True, slots=True)
+class ConnectionHealth:
+    """Saúde da conexão gravada periodicamente (ADR-0020 §1). Relógio do processo (UTC):
+    informativo, fora da regra dos 10 s. ``None`` = sem novidade (a coluna fica como está)."""
 
-    async def record_state(self, chain_code: str, state: ConsumerState, instance_id: str) -> None:
-        """Levanta ``UnknownChainError`` se a chain não estiver provisionada."""
+    last_message_at: datetime | None = None
+    last_ping_at: datetime | None = None
+    last_pong_at: datetime | None = None
+    rtt_ms: int | None = None
+
+
+class ConsumerStatusStore(Protocol):
+    """OHIP_CONSUMER_STATUS (ADR-0020 §1). Todos levantam ``UnknownChainError`` se a chain
+    não estiver provisionada."""
+
+    async def record_state(
+        self, chain_code: str, state: ConsumerState, instance_id: str
+    ) -> None: ...
+
+    async def record_subscribed(
+        self,
+        chain_code: str,
+        instance_id: str,
+        subscription_id: str,
+        token_expires_at: datetime,
+    ) -> None:
+        """``SUBSCRIBED`` com ``subscription_id``, ``connected_at`` (relógio do banco),
+        ``token_expires_at`` e ``next_attempt_at`` limpo."""
+        ...
+
+    async def record_health(self, chain_code: str, health: ConnectionHealth) -> None:
+        """Grava só os campos com valor."""
         ...
 
     async def record_disconnect(
@@ -177,8 +204,14 @@ class ConsumerStatusStore(Protocol):
         state: ConsumerState,
         close_code: int | None,
         close_reason: str | None,
+        *,
+        consecutive_failures: int = 0,
+        reconnect: bool = False,
+        next_attempt_in_s: float | None = None,
     ) -> None:
-        """Grava ``last_disconnect_at`` com o horário **do banco**, junto com o estado."""
+        """Grava ``last_disconnect_at`` com o horário **do banco**, junto com o estado, as
+        falhas seguidas, ``reconnects + 1`` se ``reconnect`` e ``next_attempt_at`` = horário
+        do banco + ``next_attempt_in_s`` (``None`` limpa)."""
         ...
 
     async def disconnect_snapshot(self, chain_code: str) -> DisconnectSnapshot: ...
@@ -685,3 +718,38 @@ class NormalizationRule(Protocol):
     def build(
         self, event: Event, raw_event_id: int, resource: Mapping[str, Any] | None
     ) -> Sequence[DomainWrite]: ...
+
+
+# =============================================================== expurgo (ADR-0020 §2)
+
+
+class PurgeTarget(StrEnum):
+    """Tabelas expurgadas, na ordem das chaves estrangeiras (ARCHITECTURE §5.1)."""
+
+    DLQ = "DLQ"  # resolvida antes do corte
+    OUTBOX = "OUTBOX"  # SENT antes do corte, sem item de DLQ apontando
+    # FAILED criada antes do corte e sem item de DLQ: o item PUBLISH já foi resolvido (retry
+    # cria linha nova, descarte não) e expurgado; sem este passo, ficaria para sempre.
+    OUTBOX_FAILED = "OUTBOX_FAILED"
+    RAW = "RAW"  # recebido antes do corte, sem outbox nem DLQ
+
+
+PURGE_ORDER: tuple[PurgeTarget, ...] = (
+    PurgeTarget.DLQ,
+    PurgeTarget.OUTBOX,
+    PurgeTarget.OUTBOX_FAILED,
+    PurgeTarget.RAW,
+)
+
+
+class PurgeStore(Protocol):
+    """Corte = relógio **do banco** menos ``retention_days``."""
+
+    async def purge_batch(self, target: PurgeTarget, retention_days: int, batch_size: int) -> int:
+        """Apaga até ``batch_size`` linhas expiradas numa transação própria (commit no fim) e
+        devolve quantas. Idempotente: o que sobrar fica para o próximo lote."""
+        ...
+
+    async def count_expired(self, target: PurgeTarget, retention_days: int) -> int:
+        """Quantas linhas o expurgo apagaria (``PURGE_DRY_RUN``)."""
+        ...

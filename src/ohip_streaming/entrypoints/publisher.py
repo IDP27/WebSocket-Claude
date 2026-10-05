@@ -43,7 +43,7 @@ from ohip_streaming.config import (
     RedisSettings,
     load_settings,
 )
-from ohip_streaming.entrypoints.common import instance_id
+from ohip_streaming.entrypoints.common import AlertCounter, instance_id, preregister
 from ohip_streaming.logging import configure_logging, get_logger
 
 log = get_logger(__name__)
@@ -97,6 +97,7 @@ async def compose(config: PublisherConfig) -> AsyncIterator[PublisherService]:
     instance = instance_id()
     clock = SystemClock()
     metrics = InMemoryMetrics()
+    preregister(metrics, alert_counters())
     pool = open_pool(config.oracle)
     executor = ThreadPoolExecutor(config.oracle.pool_max, thread_name_prefix="oracle-publisher")
     session = PooledSession(pool, call_timeout_ms=config.oracle.call_timeout_ms, executor=executor)
@@ -139,11 +140,17 @@ async def compose(config: PublisherConfig) -> AsyncIterator[PublisherService]:
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await task
+            await snapshots.publish()  # último retrato (ex.: lease perdido logo antes de sair)
     finally:
         await broker.close()
         await redis.aclose()
         pool.close(force=True)
         executor.shutdown(wait=False)
+
+
+def alert_counters() -> list[AlertCounter]:
+    """Contadores do publisher citados em deploy/prometheus/ohip-alerts.yml."""
+    return [("ohip_lease_lost_total", {"lease": LEASE_NAME})]
 
 
 async def _publish_metrics(publisher: RedisMetricsPublisher) -> None:

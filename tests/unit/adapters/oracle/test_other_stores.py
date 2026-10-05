@@ -26,7 +26,13 @@ from ohip_streaming.application.errors import (
     StoreOperationError,
     UnknownChainError,
 )
-from ohip_streaming.application.ports import DlqStage, ProcessingStatus, ReplayRequest, ReplayStatus
+from ohip_streaming.application.ports import (
+    ConnectionHealth,
+    DlqStage,
+    ProcessingStatus,
+    ReplayRequest,
+    ReplayStatus,
+)
 from ohip_streaming.domain.connection import ConsumerState
 from ohip_streaming.domain.messages import ExchangeKind, QueueMessage
 from ohip_streaming.domain.offset import Offset
@@ -327,22 +333,76 @@ async def test_enqueue_and_resolve(session: PooledSession, oracle: FakeOracle) -
 
 async def test_status_updates(session: PooledSession, oracle: FakeOracle) -> None:
     store = OracleConsumerStatusStore(session)
-    await store.record_state("C1", ConsumerState.SUBSCRIBED, "vm1:42")
+    await store.record_state("C1", ConsumerState.CONNECTING, "vm1:42")
     assert oracle.last(status_sql.RECORD_STATE_SQL).parameters == {
-        "state": "SUBSCRIBED",
+        "state": "CONNECTING",
         "instance_id": "vm1:42",
         "chain_code": "C1",
     }
-    await store.record_disconnect("C1", ConsumerState.WAITING, 4409, "x" * 900)
+    await store.record_disconnect(
+        "C1",
+        ConsumerState.WAITING,
+        4409,
+        "x" * 900,
+        consecutive_failures=3,
+        reconnect=True,
+        next_attempt_in_s=120.4567,
+    )
     params = oracle.last(status_sql.RECORD_DISCONNECT_SQL).parameters
     assert params["close_code"] == 4409
     assert len(params["close_reason"].encode()) <= 500
-    await store.record_disconnect("C1", ConsumerState.WAITING, None, None)
-    assert oracle.last(status_sql.RECORD_DISCONNECT_SQL).parameters["close_reason"] is None
+    assert (params["consecutive_failures"], params["reconnect"], params["wait_s"]) == (
+        3,
+        1,
+        120.457,
+    )
+    assert "NUMTODSINTERVAL(:wait_s, 'SECOND')" in status_sql.RECORD_DISCONNECT_SQL
+
+    # Parada (sem próxima tentativa): limpa next_attempt_at e não soma reconexão.
+    await store.record_disconnect("C1", ConsumerState.STOPPED, None, None)
+    params = oracle.last(status_sql.RECORD_FINAL_DISCONNECT_SQL).parameters
+    assert (params["close_reason"], params["reconnect"], params["consecutive_failures"]) == (
+        None,
+        0,
+        0,
+    )
+    assert "wait_s" not in params
+    assert "next_attempt_at = NULL" in status_sql.RECORD_FINAL_DISCONNECT_SQL
 
     oracle.rowcount(status_sql.RECORD_STATE_SQL, 0)
     with pytest.raises(UnknownChainError):
         await store.record_state("C9", ConsumerState.STOPPED, "vm1:42")
+
+
+async def test_record_subscribed(session: PooledSession, oracle: FakeOracle) -> None:
+    store = OracleConsumerStatusStore(session)
+    await store.record_subscribed("C1", "vm1:42", "sub-1", AWARE)
+    assert oracle.last(status_sql.RECORD_SUBSCRIBED_SQL).parameters == {
+        "instance_id": "vm1:42",
+        "subscription_id": "sub-1",
+        "token_expires_at": NAIVE,
+        "chain_code": "C1",
+    }
+    assert "connected_at = SYS_EXTRACT_UTC(SYSTIMESTAMP)" in status_sql.RECORD_SUBSCRIBED_SQL
+
+
+async def test_record_health_writes_only_known_values(
+    session: PooledSession, oracle: FakeOracle
+) -> None:
+    store = OracleConsumerStatusStore(session)
+    health = ConnectionHealth(last_message_at=AWARE, rtt_ms=42)
+    statement, params = status_sql.health_sql("C1", health)
+    assert statement is not None
+    assert "SET last_message_at = :last_message_at, last_rtt_ms = :last_rtt_ms," in statement
+    assert "last_ping_at" not in statement  # None não apaga o dado anterior
+    assert params == {"last_message_at": NAIVE, "last_rtt_ms": 42, "chain_code": "C1"}
+    await store.record_health("C1", health)
+    assert oracle.last(statement).parameters == params
+
+    assert status_sql.health_sql("C1", ConnectionHealth()) == (None, {})
+    before = len(oracle.statements())
+    await store.record_health("C1", ConnectionHealth())  # nada novo: sem ida ao banco
+    assert len(oracle.statements()) == before
 
 
 async def test_disconnect_snapshot(session: PooledSession, oracle: FakeOracle) -> None:

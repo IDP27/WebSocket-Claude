@@ -6,6 +6,7 @@ passa no fake e falha no Oracle, o adapter (ou o fake) não cumpre o contrato.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -14,6 +15,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 from tests.fakes.frames import SUBSCRIPTION_ID, frame, new_event
+from tests.fakes.memory import FakeClock
 from tests.stores.backends import Backend
 
 from ohip_streaming.application.errors import (
@@ -24,6 +26,7 @@ from ohip_streaming.application.errors import (
 )
 from ohip_streaming.application.ports import (
     BatchToPersist,
+    ConnectionHealth,
     ConsumeDlqRecord,
     DlqQuery,
     DlqStage,
@@ -32,14 +35,18 @@ from ohip_streaming.application.ports import (
     OutboxQuery,
     PageRequest,
     ProcessingStatus,
+    PurgeTarget,
     ReplayQuery,
     ReplayStatus,
 )
+from ohip_streaming.application.use_cases.purge import PurgeExpiredData, PurgeOptions
 from ohip_streaming.domain.connection import ConsumerState
 from ohip_streaming.domain.events import Event, parse_next_frame
 from ohip_streaming.domain.masking import MaskingPolicy
 from ohip_streaming.domain.messages import ExchangeKind, build_queue_message
 from ohip_streaming.domain.offset import Offset
+
+DLQ_T, OUTBOX_T, FAILED_T, RAW_T = PurgeTarget
 
 CHAIN, OTHER = "ZZT1", "ZZT2"
 RECEIVED = datetime(2026, 10, 1, 12, 0, 0, 123456, tzinfo=UTC)
@@ -336,6 +343,102 @@ async def test_consumer_status_and_disconnect_clock(backend: Backend) -> None:
     assert snapshot.last_disconnect_at <= snapshot.db_now  # mesmo relógio (do banco)
     with pytest.raises(UnknownChainError):
         await backend.status.record_state("ZZNAOEXISTE", ConsumerState.STOPPED, "x")
+
+
+async def test_consumer_status_feeds_the_api(backend: Backend) -> None:
+    """O que o consumer grava em OHIP_CONSUMER_STATUS é o que a API devolve (ADR-0020 §1)."""
+    expires = datetime(2026, 10, 1, 13, 0, tzinfo=UTC)
+    message_at = datetime(2026, 10, 1, 12, 0, 1, 250000, tzinfo=UTC)
+    await backend.status.record_subscribed(CHAIN, "vm1:42", "sub-guid", expires)
+    await backend.status.record_health(
+        CHAIN, ConnectionHealth(last_message_at=message_at, rtt_ms=7)
+    )
+    await backend.status.record_health(CHAIN, ConnectionHealth(rtt_ms=9))  # não apaga a mensagem
+
+    (chain,) = [c for c in (await backend.monitoring.status()).chains if c.chain_code == CHAIN]
+    assert chain.state is ConsumerState.SUBSCRIBED
+    assert (chain.subscription_id, chain.instance_id) == ("sub-guid", "vm1:42")
+    assert (chain.token_expires_at, chain.last_message_at) == (expires, message_at)
+    assert chain.next_attempt_at is None
+
+    await backend.status.record_disconnect(
+        CHAIN,
+        ConsumerState.WAITING,
+        4504,
+        "fake",
+        consecutive_failures=2,
+        reconnect=True,
+        next_attempt_in_s=15,
+    )
+    (chain,) = [c for c in (await backend.monitoring.status()).chains if c.chain_code == CHAIN]
+    assert (chain.reconnects_total, chain.consecutive_failures) == (1, 2)
+    assert chain.next_attempt_at is not None
+    assert chain.last_disconnect_at is not None
+    assert chain.next_attempt_at > chain.last_disconnect_at  # mesmo relógio (do banco) + 15 s
+
+    await backend.status.record_subscribed(CHAIN, "vm1:42", "sub-2", expires)
+    (chain,) = [c for c in (await backend.monitoring.status()).chains if c.chain_code == CHAIN]
+    assert (chain.subscription_id, chain.next_attempt_at, chain.reconnects_total) == (
+        "sub-2",
+        None,
+        1,
+    )
+    with pytest.raises(UnknownChainError):
+        await backend.status.record_health("ZZNAOEXISTE", ConnectionHealth(rtt_ms=1))
+
+
+# ------------------------------------------------------------------ expurgo (ADR-0020 §2)
+
+
+async def purge_now(backend: Backend, *, dry_run: bool = False) -> dict[PurgeTarget, int]:
+    use_case = PurgeExpiredData(
+        store=backend.purge,
+        clock=FakeClock(),
+        options=PurgeOptions(retention_days=90, batch_size=100, pause_s=0, dry_run=dry_run),
+    )
+    return {r.target: r.rows for r in await use_case.execute(asyncio.Event())}
+
+
+async def test_purge_keeps_what_is_still_referenced(backend: Backend) -> None:
+    backend.acquire(f"consumer:{CHAIN}")
+    await persist(backend, event(1), event(2), event(3), event(4))
+    epoch = backend.acquire("publisher")
+    sent_1, sent_2, failed = await backend.outbox.fetch_head(CHAIN, 3)
+    await backend.outbox.mark_sent(sent_1.id, epoch)
+    await backend.outbox.mark_sent(sent_2.id, epoch)
+    await backend.outbox.mark_failed(failed.id, 10, "esgotado", epoch)  # DLQ PUBLISH aberta
+    backend.age(CHAIN, 200)
+
+    # Dry run: cada passo conta pelo estado atual (o bruto liberado pela outbox só aparece
+    # na próxima execução).
+    counts = await purge_now(backend, dry_run=True)
+    assert counts == {DLQ_T: 0, OUTBOX_T: 2, FAILED_T: 0, RAW_T: 0}
+    assert backend.raw_count(CHAIN) == 4
+
+    # SENT sai, e com ela o bruto; FAILED com DLQ aberta e PENDING seguram o bruto.
+    assert await purge_now(backend) == {DLQ_T: 0, OUTBOX_T: 2, FAILED_T: 0, RAW_T: 2}
+    assert backend.raw_count(CHAIN) == 2
+    assert [o.status for o in backend.outbox_rows(CHAIN)] == ["FAILED", "PENDING"]
+
+    # Retry de DLQ PUBLISH: linha nova PENDING; a FAILED antiga perde a referência.
+    (item,) = backend.dlq_items(CHAIN)
+    assert await backend.operations.retry_publish(item.id, failed.id, "ana") is not None
+    backend.age(CHAIN, 200)
+    assert await purge_now(backend) == {DLQ_T: 1, OUTBOX_T: 0, FAILED_T: 1, RAW_T: 0}
+    assert backend.dlq_items(CHAIN) == []
+    assert [o.status for o in backend.outbox_rows(CHAIN)] == ["PENDING", "PENDING"]
+    assert backend.raw_count(CHAIN) == 2  # o bruto 3 segue preso à cópia PENDING
+
+
+async def test_purge_ignores_recent_rows(backend: Backend) -> None:
+    backend.acquire(f"consumer:{CHAIN}")
+    await persist(backend, event(1))
+    epoch = backend.acquire("publisher")
+    (head,) = await backend.outbox.fetch_head(CHAIN, 1)
+    await backend.outbox.mark_sent(head.id, epoch)
+    backend.age(CHAIN, 30)  # dentro da retenção de 90 dias
+    assert await purge_now(backend) == {DLQ_T: 0, OUTBOX_T: 0, FAILED_T: 0, RAW_T: 0}
+    assert backend.raw_count(CHAIN) == 1
 
 
 # ------------------------------------------------------------------ lease (ADR-0008)

@@ -1,0 +1,39 @@
+# Expurgo por retenção (ADR-0020 §2), disparado por ohip-purge.timer. Arquivo de ambiente
+# só dele, com ORACLE_USER=ohip_purge (SELECT/DELETE nas três tabelas). PURGE_DRY_RUN=true
+# (padrão) só conta: confira as contagens no journal antes de pôr false.
+[Unit]
+Description=OHIP Streaming - expurgo por retenção
+Documentation=file:///opt/ohip-streaming/docs/RUNBOOK.md
+After=network-online.target
+Wants=network-online.target
+# Alerta de falha (Q-7): descomente com a unidade de notificação do ambiente.
+# OnFailure=ohip-alerta@%n.service
+
+[Service]
+Type=oneshot
+User=ohip
+Group=ohip
+WorkingDirectory=/opt/ohip-streaming
+EnvironmentFile=/etc/ohip/purge.env
+ExecStart=/opt/ohip-streaming/.venv/bin/ohip-purge
+# Maior que PURGE_MAX_RUNTIME_S: o processo para sozinho no prazo; isto é só a rede de segurança.
+TimeoutStartSec=4500
+KillSignal=SIGTERM
+Nice=10
+IOSchedulingClass=idle
+# Endurecimento (ADR-0020 §4). O Instant Client grava trace em $HOME (StateDirectory).
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+UMask=0077
+StateDirectory=ohip
+Environment=HOME=/var/lib/ohip

@@ -61,7 +61,7 @@ from ohip_streaming.config import (
 )
 from ohip_streaming.domain.connection import ReconnectPolicy
 from ohip_streaming.domain.messages import ExchangeKind
-from ohip_streaming.entrypoints.common import instance_id
+from ohip_streaming.entrypoints.common import AlertCounter, instance_id, preregister
 from ohip_streaming.logging import configure_logging, get_logger
 
 log = get_logger(__name__)
@@ -111,6 +111,7 @@ def consumer_options(config: ConsumerConfig, instance: str) -> ConsumerOptions:
         batch_max_events=c.batch_max_events,
         batch_max_wait_s=c.batch_max_wait_ms / 1000,
         control_poll_interval_s=c.control_poll_interval_s,
+        status_interval_s=c.status_interval_s,
         status_check_enabled=o.status_check_enabled,
         policy=ReconnectPolicy(
             min_gap_s=o.reconnect_min_gap_s,
@@ -130,6 +131,17 @@ def exchange_names(rabbitmq: RabbitMQSettings) -> dict[ExchangeKind, str]:
     }
 
 
+def alert_counters(chain_code: str) -> list[AlertCounter]:
+    """Contadores do consumer citados em deploy/prometheus/ohip-alerts.yml."""
+    chain = {"chain_code": chain_code}
+    return [
+        ("ohip_connection_poisoned_total", chain),
+        ("ohip_card_data_detected_total", chain),
+        ("ohip_ws_reconnects_total", {"code": "4409", **chain}),
+        ("ohip_lease_lost_total", {"lease": f"consumer:{chain_code}"}),
+    ]
+
+
 @asynccontextmanager
 async def compose(config: ConsumerConfig) -> AsyncIterator[ChainConsumer]:
     """Monta o consumer com os adapters reais e fecha tudo na saída."""
@@ -137,6 +149,7 @@ async def compose(config: ConsumerConfig) -> AsyncIterator[ChainConsumer]:
     instance = instance_id()
     clock = SystemClock()
     metrics = InMemoryMetrics()
+    preregister(metrics, alert_counters(o.chain_code))
     pool = open_pool(config.oracle)
     writer = DedicatedSession(pool, call_timeout_ms=config.oracle.call_timeout_ms)
     control = PooledSession(pool, call_timeout_ms=config.oracle.call_timeout_ms)
@@ -203,6 +216,7 @@ async def compose(config: ConsumerConfig) -> AsyncIterator[ChainConsumer]:
             snapshots.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await snapshots
+            await publisher.publish()  # último retrato (ex.: lease perdido logo antes de sair)
     finally:
         writer.close()
         await http.aclose()

@@ -21,12 +21,14 @@ from tests.fakes.memory import (
     FakeTokenIssuer,
     InMemoryDatabase,
     MemoryLeaseStore,
+    StatusRow,
 )
 
 from ohip_streaming.adapters.ohip_ws.client import WebsocketsConnector
 from ohip_streaming.adapters.system import SystemClock
 from ohip_streaming.application.errors import (
     AuthRejectedError,
+    LeaseLostError,
     StoreOperationError,
     StoreUnavailableError,
 )
@@ -142,7 +144,7 @@ class Harness:
         return self.db.offsets[CHAIN].last_offset
 
     def state(self) -> ConsumerState:
-        return self.db.statuses[CHAIN][0]
+        return self.db.statuses[CHAIN].state
 
 
 @pytest.fixture
@@ -167,7 +169,7 @@ async def test_consumes_events_and_stops_gracefully(server: FakeOhipServer) -> N
     assert conn.subscribe_offsets == [None]  # primeira assinatura: sem offset
     assert conn.pongs_received == 0
     assert h.state() is ConsumerState.WAITING  # desconexão gravada com o relógio do banco
-    assert h.db.statuses[CHAIN][2] is not None
+    assert h.db.statuses[CHAIN].last_disconnect_at is not None
     assert not h.lease.lost
     assert h.lease.epoch is None  # lease liberado
 
@@ -357,7 +359,7 @@ async def test_status_check_before_subscribe(server: FakeOhipServer) -> None:
 
 async def test_restart_after_crash_waits_the_full_gap(server: FakeOhipServer) -> None:
     h = Harness(server)
-    h.db.statuses[CHAIN] = (ConsumerState.SUBSCRIBED, "vm-antiga", None, None)  # caiu assinado
+    h.db.statuses[CHAIN] = StatusRow(ConsumerState.SUBSCRIBED, "vm-antiga")  # caiu assinado
     loop = asyncio.get_running_loop()
     started = loop.time()
     h.start()
@@ -475,7 +477,7 @@ async def test_stop_while_waiting_for_the_lease(server: FakeOhipServer) -> None:
     store = h.lease._store
     assert isinstance(store, MemoryLeaseStore)
     store.holders[f"consumer:{CHAIN}"] = ("outra-vm", h.db.clock.now() + timedelta(hours=1))
-    active = (ConsumerState.SUBSCRIBED, "outra-vm", None, None)  # a ativa está assinada
+    active = StatusRow(ConsumerState.SUBSCRIBED, "outra-vm")  # a ativa está assinada
     h.db.statuses[CHAIN] = active
     h.start()
     await asyncio.sleep(0.1)
@@ -546,3 +548,118 @@ async def test_poisoned_connection_writes_nothing_after_complete(server: FakeOhi
     assert all(o in ("1", "2") for o in first_connection)  # 4 e 5 chegaram depois: descartados
     assert server.connections[1].subscribe_offsets == ["1"]  # nenhum salto de offset
     assert len(h.db.raw) == 5
+
+
+# ---------------------------------------------------------------- OHIP_CONSUMER_STATUS (ADR-0020)
+
+
+async def test_status_row_tracks_the_connection(server: FakeOhipServer) -> None:
+    h = Harness(server, status_interval_s=0.05)
+    h.start()
+    await h.until(lambda: h.offset == Offset("5"))
+
+    def healthy() -> bool:
+        row = h.db.statuses[CHAIN]
+        return None not in (row.last_message_at, row.last_ping_at, row.last_pong_at, row.rtt_ms)
+
+    await h.until(healthy)
+    row = h.db.statuses[CHAIN]
+    assert row.state is ConsumerState.SUBSCRIBED
+    assert row.subscription_id == server.connections[0].frames[1]["id"]  # GUID do subscribe
+    assert row.connected_at is not None
+    assert row.token_expires_at is not None
+    assert row.token_expires_at > h.clock.now()
+    assert row.instance_id == "vm1:1"
+    assert row.rtt_ms is not None
+    assert row.rtt_ms >= 0
+
+    await h.stop()
+    final = h.db.statuses[CHAIN]
+    assert final.state is ConsumerState.WAITING
+    assert (final.reconnects, final.consecutive_failures, final.next_attempt_at) == (0, 0, None)
+
+
+async def test_reconnect_records_failures_and_next_attempt(server: FakeOhipServer) -> None:
+    server.behaviors = [Behavior(close_after_subscribe=4504)]  # sessão sem evento: falha
+    h = Harness(server)
+    disconnects: list[dict[str, Any]] = []
+    original = h.db.record_disconnect
+
+    async def spy(*args: Any, **kwargs: Any) -> None:
+        disconnects.append(kwargs)
+        await original(*args, **kwargs)
+
+    h.db.record_disconnect = spy  # type: ignore[method-assign]
+    h.start()
+    await h.until(lambda: h.offset == Offset("5"))
+    row = h.db.statuses[CHAIN]
+    assert (row.reconnects, row.consecutive_failures) == (1, 1)
+    assert row.next_attempt_at is None  # limpo ao assinar de novo
+    await h.stop()
+
+    first, last = disconnects[0], disconnects[-1]
+    assert first == {
+        "consecutive_failures": 1,
+        "reconnect": True,
+        "next_attempt_in_s": pytest.approx(FAST.backoff_4504_s),
+    }
+    # A 2ª sessão recebeu eventos (saudável): na parada, falhas zeradas e sem próxima tentativa.
+    assert last == {"consecutive_failures": 0, "reconnect": False, "next_attempt_in_s": None}
+    assert h.db.statuses[CHAIN].reconnects == 1
+
+
+async def test_status_write_failure_does_not_break_the_session(server: FakeOhipServer) -> None:
+    h = Harness(server, status_interval_s=0.05)
+    calls = 0
+
+    async def broken(chain_code: str, health: Any) -> None:
+        nonlocal calls
+        calls += 1
+        raise StoreOperationError("ORA-01031: privilégios insuficientes")
+
+    h.db.record_health = broken  # type: ignore[method-assign]
+    h.start()
+    await h.until(lambda: h.offset == Offset("5") and calls >= 2)
+    assert len(server.connections) == 1  # o status é informativo: a conexão segue
+    assert h.state() is ConsumerState.SUBSCRIBED
+    await h.stop()
+
+
+async def test_lost_lease_never_touches_the_new_owners_row(server: FakeOhipServer) -> None:
+    h = Harness(server, status_interval_s=0.05)
+    h.start()
+    await h.until(lambda: h.offset == Offset("5"))
+    # Failover: a nova dona assinou e gravou a linha; a antiga ainda vai drenar e sair.
+    h.db.leases[f"consumer:{CHAIN}"] += 1
+    new_owner = StatusRow(ConsumerState.SUBSCRIBED, "vm-nova", subscription_id="sub-nova")
+    h.db.statuses[CHAIN] = new_owner
+    h.lease._lose("teste")
+    assert h.task is not None
+    await asyncio.wait_for(h.task, 5)
+    assert h.db.statuses[CHAIN] == new_owner  # nem DRAINING, nem saúde, nem WAITING
+
+
+async def test_epoch_barrier_failure_stops_status_writes(server: FakeOhipServer) -> None:
+    h = Harness(server, status_interval_s=0.05)
+    log: list[str] = []
+    for name in ("record_state", "record_subscribed", "record_health", "record_disconnect"):
+        original = getattr(h.db, name)
+
+        def spy(*args: Any, _name: str = name, _original: Any = original, **kwargs: Any) -> Any:
+            log.append(_name)
+            return _original(*args, **kwargs)
+
+        setattr(h.db, name, spy)
+
+    def barrier(batch: Any) -> Exception | None:
+        log.append("barreira")  # outra instância assumiu: o UPDATE do epoch não casou
+        return LeaseLostError("epoch mudou")
+
+    h.db.fail_persist_when = barrier
+    h.start()
+    await h.until(lambda: "barreira" in log)
+    assert h.task is not None
+    await asyncio.wait_for(h.task, 5)  # sai sem reconectar
+    assert "record_subscribed" in log
+    assert log[log.index("barreira") + 1 :] == []  # nada gravado depois da barreira
+    assert len(server.connections) == 1

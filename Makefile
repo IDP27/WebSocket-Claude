@@ -10,7 +10,7 @@ RUN := PYTHONPATH=src PATH="$(CURDIR)/.venv/bin:$$PATH"
 endif
 UNIT_MARKERS := not oracle and not rabbitmq and not redis and not load
 
-.PHONY: help install lint format typecheck imports test test-integration oracle-docs check clean
+.PHONY: help install lint format typecheck imports test test-integration test-load oracle-docs check clean
 
 help:  ## Lista os alvos
 	@grep -E '^[a-z-]+:.*##' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-18s %s\n", $$1, $$2}'
@@ -38,6 +38,9 @@ test:  ## Testes sem infraestrutura, com cobertura
 
 test-integration:  ## Testes que precisam de Oracle/RabbitMQ/Redis de teste
 	$(RUN) pytest -m "oracle or rabbitmq or redis"
+
+test-load:  ## Teste de carga do consumer (RNF-13; LOAD_* ajustam, ver tests/load/)
+	$(RUN) pytest -m load -s tests/load
 
 oracle-docs:  ## Confere a integridade das specs oficiais da Oracle em vendor/ (ADR-0012)
 	scripts/sync_oracle_api_docs.sh --check

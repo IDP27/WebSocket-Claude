@@ -372,6 +372,8 @@ class ConsumerSettings(BaseSettings):
     batch_max_wait_ms: int = Field(default=200, ge=1)
     batch_max_retries: int = Field(default=5, ge=0)
     control_poll_interval_s: float = Field(default=5.0, gt=0)
+    # Saúde da conexão em OHIP_CONSUMER_STATUS (última mensagem, ping/pong, RTT; ADR-0020).
+    status_interval_s: float = Field(default=15.0, ge=1)
 
 
 class LeaseSettings(BaseSettings):
@@ -417,6 +419,23 @@ class ApiSettings(BaseSettings):
             if not _SHA256_HEX_RE.fullmatch(token_hash):
                 raise ValueError("API_SERVICE_TOKENS deve mapear SHA-256 em hex minúsculo → perfil")
         return value
+
+
+class PurgeSettings(BaseSettings):
+    """Expurgo por retenção, processo ``ohip-purge`` (ARCHITECTURE §5.1, ADR-0020 §2).
+    Credenciais: o grupo ``ORACLE_*`` num arquivo de ambiente com o usuário ``ohip_purge``."""
+
+    model_config = _config("PURGE_")
+
+    # Q-9 (padrão 90 dias). Mínimo de 30: um valor errado apagaria histórico recente.
+    retention_days: int = Field(default=90, ge=30)
+    batch_size: int = Field(default=5_000, ge=100, le=50_000)
+    pause_ms: int = Field(default=200, ge=0)
+    max_runtime_s: float = Field(default=3_600.0, ge=60)
+    # Prazo de cada DELETE em lote (maior que o ORACLE_CALL_TIMEOUT_MS das outras rotas).
+    call_timeout_ms: int = Field(default=300_000, ge=10_000)
+    # Padrão: só conta. Apagar exige PURGE_DRY_RUN=false, depois de conferir as contagens.
+    dry_run: bool = True
 
 
 class LogSettings(BaseSettings):
