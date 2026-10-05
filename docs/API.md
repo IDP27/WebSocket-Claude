@@ -1,6 +1,6 @@
 # API de controle — `ohip-api` (FastAPI)
 
-> Status: **Contrato aprovado na Fase 0 (2026-10-01)**. Implementação na Fase 7. O OpenAPI gerado pelo FastAPI passa a ser a referência executável; este documento registra as decisões.
+> Status: **Contrato aprovado na Fase 0 (2026-10-01); implementado na Fase 7 (ADR-0017).** O OpenAPI gerado pelo FastAPI (`/openapi.json`) é a referência executável; `tests/contract/test_api_contract.py` confere a tabela de endpoints contra ele. Este documento registra as decisões.
 
 ## Convenções
 
@@ -9,6 +9,10 @@
 - Auditoria: ações `admin` exigem o header `X-Actor` (usuário final repassado pelo `ohip-admin`, vindo do SSO/Nginx). Gravado em `requested_by` / `resolved_by`. O `ohip-admin` usa o token `read` ou `admin` conforme o grupo do usuário (ADR-0004).
 - Rotas que tocam o Oracle são `def` (síncronas, threadpool do FastAPI) — ADR-0003.
 - Paginação no banco com `ROWNUM` (11g): `?limit=` (padrão 50, máx. 200) e `?cursor=` (último `id` visto; paginação por chave, sem `OFFSET`).
+- Listas paginadas respondem `{"items": [...], "next_cursor": <id ou null>}`; `next_cursor` é o `cursor` da próxima página. Ordem: `id` decrescente.
+- `from`/`to` de `/events` filtram `received_at` (`from` inclusive, `to` exclusive); data sem fuso é UTC. `event_name` é normalizado (maiúsculas, espaços simples) e `module_name` compara sem diferenciar maiúsculas.
+- `/docs`, `/redoc` e `/openapi.json` só fora de produção (`APP_ENVIRONMENT=producao` desliga).
+- `X-Request-ID` (até 64 caracteres `[A-Za-z0-9._-]`) é aceito do cliente ou gerado, e volta no header da resposta e no `request_id` do erro.
 - Datas em ISO-8601 UTC. Erros no formato:
 
 ```json
@@ -32,7 +36,7 @@
 | POST | `/api/v1/events/{unique_event_id}/reprocess` | admin | Insere na outbox uma mensagem para o exchange `ohip.reprocess` (só o enricher recebe). O enricher não deduplica reprocessamentos e o `MERGE` usa `<=`, então reaplica a regra (idempotente). 202 Accepted. |
 | POST | `/api/v1/replay` | admin | Pede replay de uma chain a partir de um offset. 202 Accepted. |
 | GET | `/api/v1/replay` | read | **Adição ao PRD:** lista pedidos de replay e seu status (o painel precisa acompanhar o pedido). |
-| DELETE | `/api/v1/replay/{id}` | admin | **Adição ao PRD:** cancela um pedido ainda `PENDING` (`CANCELLED`). |
+| DELETE | `/api/v1/replay/{id}` | admin | **Adição ao PRD:** cancela um pedido ainda `PENDING` (`CANCELLED`). Responde 200 com o pedido atualizado. |
 | GET | `/api/v1/outbox` | read | Filtros: `status` (`PENDING`/`FAILED`), `chain_code`. Inclui idade da mais antiga. |
 | GET | `/api/v1/dlq` | read | Filtros: `stage`, `chain_code`, `resolved` (bool). |
 | POST | `/api/v1/dlq/{id}/retry` | admin | Reprocessa o item conforme o estágio. 202 Accepted. |
@@ -92,10 +96,10 @@ Como o consumer aplica o pedido (caso de uso `ApplyReplay`, ARCHITECTURE §4.6):
 
 A troca do offset acontece sem conexão aberta, então nenhum lote a sobrescreve. Crash antes do passo 3: o pedido continua `PENDING` e é aplicado antes do próximo `subscribe`. Eventos já gravados são ignorados pela deduplicação; o replay só preenche lacunas.
 
-Resposta `202`:
+Resposta `202` (`warnings` traz o aviso de retenção, quando houver):
 
 ```json
-{"id": 12, "status": "PENDING", "chain_code": "CHAIN1", "from_offset": "97000"}
+{"id": 12, "status": "PENDING", "chain_code": "CHAIN1", "from_offset": "97000", "warnings": []}
 ```
 
 ### `POST /api/v1/dlq/{id}/retry`
@@ -114,7 +118,8 @@ Resposta `202`:
 
 | HTTP | `code` | Quando |
 | --- | --- | --- |
-| 400 | `VALIDATION_ERROR` | Parâmetro inválido |
+| 400 | `VALIDATION_ERROR` | Parâmetro inválido (a mensagem não repete o valor recebido) |
+| 400 | `REPLAY_OFFSET_INVALID`, `REPLAY_CONFIRMATION_MISMATCH`, `REPLAY_REASON_REQUIRED` | Regras do pedido de replay (qualquer outro erro de regra sai como `VALIDATION_ERROR`) |
 | 401 | `UNAUTHENTICATED` | Sem token ou token inválido |
 | 403 | `FORBIDDEN` | Perfil `read` tentando ação `admin`, ou sem `X-Actor` |
 | 404 | `NOT_FOUND` | Evento, item de DLQ ou chain inexistente |
@@ -122,4 +127,5 @@ Resposta `202`:
 | 409 | `REPLAY_NOT_PENDING` | Cancelamento de pedido que não está `PENDING` |
 | 409 | `INVALID_STATE` | Item de DLQ já resolvido ou com retry já pedido; item sem a referência necessária; evento `IGNORED` |
 | 422 | `REPLAY_FORWARD_NOT_ALLOWED` | `from_offset` maior que o último offset confirmado |
+| 500 | `INTERNAL_ERROR` | Erro inesperado (detalhe só no log, pelo `request_id`) |
 | 503 | `DEPENDENCY_UNAVAILABLE` | Oracle indisponível |

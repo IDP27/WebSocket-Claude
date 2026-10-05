@@ -313,3 +313,14 @@ def test_env_example_has_no_inline_comments() -> None:
     for line in (ROOT / ".env.example").read_text().splitlines():
         if re.match(r"^[A-Z][A-Z0-9_]*=", line):
             assert " #" not in line, line
+
+
+def test_api_settings_defaults() -> None:
+    settings = ApiSettings()
+    assert (settings.host, settings.port, settings.workers) == ("127.0.0.1", 8080, 2)
+    assert (settings.metrics_cache_s, settings.ready_cache_s) == (5.0, 5.0)
+
+
+def test_ohip_routing_settings_need_no_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OHIP_MODULE_CODES", '{" Reservation ": "rsv"}')
+    assert config.OhipRoutingSettings().module_codes == {"reservation": "rsv"}

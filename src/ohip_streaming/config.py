@@ -194,6 +194,20 @@ class OhipSettings(BaseSettings):
         return self
 
 
+class OhipRoutingSettings(BaseSettings):
+    """Só o que a API precisa do grupo ``OHIP_`` (routing key do reprocessamento): ela não
+    recebe app key, client secret nem gateway (ADR-0017)."""
+
+    model_config = _config("OHIP_")
+
+    module_codes: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("module_codes")
+    @classmethod
+    def _normalize_module_codes(cls, value: dict[str, str]) -> dict[str, str]:
+        return {key.strip().lower(): code.strip() for key, code in value.items()}
+
+
 class OracleSettings(BaseSettings):
     """Oracle 11g em modo Thick (ADR-0003)."""
 
@@ -309,11 +323,20 @@ TokenRole = Literal["read", "admin"]
 
 
 class ApiSettings(BaseSettings):
-    """Tokens de serviço da API: SHA-256 (hex) do token → perfil. Nunca o token em claro."""
+    """API de controle (ADR-0017). Tokens de serviço: SHA-256 (hex) do token → perfil; nunca
+    o token em claro."""
 
     model_config = _config("API_")
 
     service_tokens: dict[str, TokenRole] = Field(default_factory=dict)
+    host: str = "127.0.0.1"  # atrás do Nginx (TLS e bloqueio de /health, /ready, /metrics)
+    port: int = Field(default=8080, ge=1, le=65535)
+    workers: int = Field(default=2, ge=1)
+    # Prazo de cada chamada ao Oracle feita pela API, menor que o do consumer: uma busca cara
+    # não segura uma conexão do pool (ORACLE_POOL_MAX por worker) por muito tempo.
+    oracle_call_timeout_ms: int = Field(default=15_000, ge=1_000)
+    metrics_cache_s: float = Field(default=5.0, ge=0)
+    ready_cache_s: float = Field(default=5.0, ge=0)
 
     @field_validator("service_tokens")
     @classmethod

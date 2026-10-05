@@ -25,8 +25,14 @@ from ohip_streaming.application.errors import (
 from ohip_streaming.application.ports import (
     BatchToPersist,
     ConsumeDlqRecord,
+    DlqQuery,
+    DlqStage,
+    EventFilter,
     NewEventRecord,
+    OutboxQuery,
+    PageRequest,
     ProcessingStatus,
+    ReplayQuery,
     ReplayStatus,
 )
 from ohip_streaming.domain.connection import ConsumerState
@@ -360,3 +366,75 @@ async def test_lease_has_one_owner_and_fences_writes(backend: Backend) -> None:
 async def test_unprovisioned_lease(backend: Backend) -> None:
     with pytest.raises(LeaseNotProvisionedError):
         await backend.leases.acquire("consumer:ZZNAOEXISTE", "vm1", 30)
+
+
+# ------------------------------------------------------------------ consultas da API (Fase 7)
+
+
+async def test_monitoring_reads_what_the_consumer_wrote(backend: Backend) -> None:
+    backend.acquire(f"consumer:{CHAIN}")
+    first, second = event(1), event(2, hotel_id="ZZTH2")
+    await persist(backend, first, second)
+    await backend.replay.create_request(CHAIN, Offset("1"), "lacuna", "ana")
+
+    page = await backend.monitoring.events(EventFilter(chain_code=CHAIN), PageRequest(limit=1))
+    assert [e.unique_event_id for e in page.items] == [second.unique_event_id]
+    assert page.next_cursor == page.items[0].raw_event_id
+    rest = await backend.monitoring.events(
+        EventFilter(chain_code=CHAIN), PageRequest(limit=1, cursor=page.next_cursor)
+    )
+    assert [e.unique_event_id for e in rest.items] == [first.unique_event_id]
+    assert rest.next_cursor is None
+    filtered = await backend.monitoring.events(
+        EventFilter(
+            chain_code=CHAIN,
+            hotel_id="ZZTH2",
+            module_name="reservation",
+            event_name="UPDATE RESERVATION",
+            received_from=RECEIVED,
+            received_to=RECEIVED + timedelta(microseconds=1),
+        ),
+        PageRequest(),
+    )
+    assert [e.unique_event_id for e in filtered.items] == [second.unique_event_id]
+    assert filtered.items[0].received_at == RECEIVED  # fração de segundo preservada
+
+    record = await backend.monitoring.event(first.unique_event_id)
+    assert record is not None
+    assert record.stored.event.unique_event_id == first.unique_event_id
+    assert [o.status for o in record.outbox] == ["PENDING"]
+    assert await backend.monitoring.event("zzt-nao-existe") is None
+
+    snapshot = await backend.monitoring.status()
+    (chain,) = [c for c in snapshot.chains if c.chain_code == CHAIN]
+    assert chain.last_offset == Offset("2")
+    assert chain.outbox.pending == 2
+    assert chain.outbox.oldest_pending_at is not None
+
+    outbox = await backend.monitoring.outbox(OutboxQuery("PENDING", CHAIN), PageRequest())
+    assert len(outbox.items) == 2
+    age = await backend.monitoring.oldest_pending_age_s(CHAIN)
+    assert age is not None
+    assert age >= 0  # created_at e "agora" vêm do mesmo relógio (o do banco)
+    assert await backend.monitoring.oldest_pending_age_s(OTHER) is None
+
+    (replay,) = (await backend.monitoring.replays(ReplayQuery(CHAIN), PageRequest())).items
+    assert (replay.status, replay.requested_by) == (ReplayStatus.PENDING, "ana")
+    assert await backend.monitoring.replay(replay.id) == replay
+    await backend.monitoring.ping()
+
+
+async def test_monitoring_dlq_filters(backend: Backend) -> None:
+    backend.acquire(f"consumer:{CHAIN}")
+    rejected = ConsumeDlqRecord("{lixo", "JSON inválido", Offset("7"), None)
+    await backend.events.persist_batch(batch(backend, (), rejected=(rejected,), offset=Offset("7")))
+
+    open_items = await backend.monitoring.dlq(
+        DlqQuery(stage=DlqStage.CONSUME, chain_code=CHAIN, resolved=False), PageRequest()
+    )
+    (item,) = open_items.items
+    assert (item.offset, item.resolution) == ("7", None)
+    resolved = await backend.monitoring.dlq(
+        DlqQuery(chain_code=CHAIN, resolved=True), PageRequest()
+    )
+    assert resolved.items == ()

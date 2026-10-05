@@ -4,7 +4,8 @@ Todo acesso é síncrono e roda num executor via ``run_in_executor`` (leva o con
 
 - ``DedicatedSession``: uma conexão fixa e **um** thread. É a conexão de escrita do consumer:
   um único thread preserva a ordem das transações da chain.
-- ``PooledSession``: conexão do pool por chamada. Publisher, controle e API.
+- ``PooledSession``: conexão do pool por chamada. Publisher e controle do consumer.
+- ``InlineSession``: ``PooledSession`` no thread de quem chama. Só a API (ADR-0017).
 
 Uma falha de indisponibilidade descarta a conexão; a próxima chamada pega outra.
 """
@@ -182,10 +183,14 @@ def query(
     parameters: dict[str, Any],
     *,
     failure: type[ApplicationError],
+    input_sizes: dict[str, Any] | None = None,
 ) -> list[Sequence[Any]]:
-    """SELECT fora de transação de escrita."""
+    """SELECT fora de transação de escrita. ``input_sizes``: tipos dos binds (ex.: TIMESTAMP,
+    que o driver mandaria como DATE e cortaria a fração de segundo)."""
     cursor = new_cursor(connection)
     try:
+        if input_sizes:
+            cursor.setinputsizes(**input_sizes)
         cursor.execute(statement, parameters)
         return list(cursor.fetchall())
     except oracledb.Error as exc:
@@ -261,6 +266,21 @@ class PooledSession:
             raise
         self._pool.release(connection)
         return result
+
+
+class InlineSession:
+    """``PooledSession`` sem executor: o trabalho roda no thread de quem chama.
+
+    Só para a API (ADR-0017): a rota ``def`` já roda num thread do threadpool e executa o caso
+    de uso com ``asyncio.run`` nesse mesmo thread. O Oracle nunca é chamado do event loop do
+    Uvicorn, e mandar para outro executor só trocaria de thread.
+    """
+
+    def __init__(self, pooled: PooledSession) -> None:
+        self._pooled = pooled
+
+    async def run(self, work: Callable[[Any], T]) -> T:
+        return self._pooled.call(work)
 
 
 def _acquire(pool: Pool, call_timeout_ms: int) -> Any:

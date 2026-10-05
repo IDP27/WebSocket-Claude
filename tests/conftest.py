@@ -20,6 +20,7 @@ _PREFIXES = (
     "API_",
     "LOG_",
     "LEASE_",
+    "PUBLISHER_",
 )
 
 

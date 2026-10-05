@@ -1,6 +1,6 @@
 {
   // Depuração. Consumer e publisher leem o .env da raiz (copie do .env.example; fora do git).
-  // Use só sandbox OHIP e Oracle/RabbitMQ/Redis de teste. API e painel entram nas Fases 7 e 8.
+  // Use só sandbox OHIP e Oracle/RabbitMQ/Redis de teste. O painel entra na Fase 8.
   "version": "0.2.0",
   "configurations": [
     {
@@ -28,6 +28,17 @@
       "type": "debugpy",
       "request": "launch",
       "module": "ohip_streaming.entrypoints.consumer",
+      "envFile": "${workspaceFolder}/.env",
+      "env": { "PYTHONPATH": "src" },
+      "cwd": "${workspaceFolder}",
+      "justMyCode": true
+    },
+    {
+      "name": "ohip-api (Oracle/Redis de teste)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "uvicorn",
+      "args": ["ohip_streaming.entrypoints.api.app:create_app", "--factory", "--port", "8080", "--no-access-log"],
       "envFile": "${workspaceFolder}/.env",
       "env": { "PYTHONPATH": "src" },
       "cwd": "${workspaceFolder}",

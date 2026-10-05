@@ -29,6 +29,7 @@ class FakeRedis:
     def __init__(self) -> None:
         self.data: dict[str, bytes] = {}
         self.ttls: dict[str, int | None] = {}
+        self.sets: dict[str, set[str]] = {}
         self.broken = False
 
     def _check(self) -> None:
@@ -65,13 +66,22 @@ class FakePipeline:
     def __init__(self, redis: FakeRedis) -> None:
         self.redis = redis
         self.ops: list[tuple[str, Any, int | None]] = []
+        self.adds: list[tuple[str, tuple[str, ...]]] = []
 
     def set(self, name: str, value: Any, ex: int | None = None) -> FakePipeline:
         self.ops.append((name, value, ex))
         return self
 
+    def sadd(self, name: str, *values: str) -> FakePipeline:
+        self.adds.append((name, values))
+        return self
+
     async def execute(self) -> list[Any]:
-        return [await self.redis.set(n, v, ex=e) for n, v, e in self.ops]
+        results = [await self.redis.set(n, v, ex=e) for n, v, e in self.ops]
+        for name, values in self.adds:
+            self.redis._check()
+            self.redis.sets.setdefault(name, set()).update(values)
+        return results
 
 
 async def test_seen_cache() -> None:
@@ -138,6 +148,7 @@ async def test_metrics_snapshot() -> None:
     assert await publisher.publish()
     assert key == "ohip:metrics:consumer:vm1:42"
     assert redis.ttls[key] == 60
+    assert redis.sets["ohip:metrics_index"] == {key}  # a API lê pelo índice, sem SCAN
     assert json.loads(redis.data[key]) == [
         {"name": "ohip_events_inserted_total", "labels": {"chain_code": "C1"}, "value": 5},
         {"name": "ohip_token_issued_total", "labels": {}, "value": 1},

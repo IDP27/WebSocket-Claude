@@ -12,10 +12,10 @@
 | 4. Auth, lease e Redis (+ `LeaseSettings` comum, ADR-0010) ✅ aprovada | `TokenProvider` (OAuth, cache, margem), `Lease` no Oracle (ADR-0008), caches e métricas no Redis | M | 2, 3 | Q-10, Q-12, DV-12 |
 | 5. Consumer WebSocket ✅ aprovada (validação no sandbox OHIP pendente) | Protocolo, heartbeat dinâmico, máquina de estados, códigos, replay, shutdown; `fake_ohip_server.py` e cenários | G | 3, 4 | Sandbox OHIP para validar D-1, D-4, D-7 (não bloqueia o código) |
 | 6. Publisher outbox ✅ aprovada (validação em RabbitMQ real pendente) | Lotes por chain, publisher confirms, backoff com cabeça da fila, DLQ; testes de contrato | M | 3 | RabbitMQ de teste; Q-13 |
-| 7. API FastAPI | Endpoints, perfis, auditoria, OpenAPI, `/metrics` | M | 3 | — |
+| 7. API FastAPI ✅ aprovada (planos de execução a conferir no Oracle real, Q-17) | Endpoints, perfis, auditoria, OpenAPI, `/metrics` | M | 3 | — |
 | 8. Painel Flask | Páginas, componentes, HTMX, cliente da API | M | 7 | Q-5 |
 | 9. Enricher | Esqueleto com cache, rate limit, `MERGE`; regras por evento após Q-1 | M (esqueleto) / G (regras) | 6 | Q-1, Q-2, assinatura das APIs REST |
-| 10. Endurecimento | Teste de carga 10× (Otimizador), `/entender` geral, systemd, Nginx, expurgo, RUNBOOK, README | G | 5–9 | Q-6, Q-7, Q-8 |
+| 10. Endurecimento | Teste de carga 10× (Otimizador), `/entender` geral, systemd, Nginx, expurgo, RUNBOOK, README; consumer gravando `subscription_id`, `last_message_at`, reconexões, `token_expires_at` e ping/pong em `OHIP_CONSUMER_STATUS` (pendência do status da API, ADR-0017) | G | 5–9 | Q-6, Q-7, Q-8 |
 
 ## Caminho crítico
 

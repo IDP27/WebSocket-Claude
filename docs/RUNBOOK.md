@@ -43,6 +43,24 @@ Os cenários de `tests/stores/` rodam no fake e, com estas variáveis, num Oracl
 - `broker_indisponivel` repetido: broker fora ou rede; nenhuma tentativa é gasta e nada vai para a DLQ, por mais que dure. Linhas `FAILED` + DLQ `PUBLISH` só por `nack` ou mensagem grande demais; reprocesse pela API.
 - Testes contra um RabbitMQ de teste (vhost descartável): `TEST_RABBITMQ_URL` + `TEST_RABBITMQ_DISPOSABLE=sim` e `make test-integration`.
 
+## API de controle (`ohip-api`)
+
+- Comando: `ohip-api` (Uvicorn com `API_WORKERS` workers em `API_HOST`:`API_PORT`, padrão `127.0.0.1:8080`, atrás do Nginx). Cada worker tem o seu pool Oracle (`ORACLE_POOL_MAX` conexões); se o Oracle estiver fora na partida, o worker não sobe e o systemd tenta de novo.
+- Tokens de serviço: gere um token aleatório por perfil (`read` e `admin`), guarde o token no cofre do painel e ponha só o hash em `API_SERVICE_TOKENS` (`{"<sha256>": "read", "<sha256>": "admin"}`):
+
+  ```bash
+  python -c 'import secrets; print(secrets.token_urlsafe(32))'   # token (vai para o painel)
+  printf '%s' "$TOKEN" | sha256sum | cut -d' ' -f1                 # hash (vai para a API)
+  ```
+
+- `/health` (processo de pé), `/ready` (Oracle, Redis e RabbitMQ; 503 com o resultado de cada um) e `/metrics` (Prometheus) não pedem token: o Nginx não pode expô-los para fora.
+- Ações `admin` exigem `X-Actor` (o painel repassa o usuário). Toda requisição gera `api_requisicao` (método, rota sem query string, status, duração, perfil, ator e `request_id`); `?unmasked=true` gera `auditoria_dado_sem_mascara`.
+- Erro 503 `DEPENDENCY_UNAVAILABLE`: Oracle fora ou pool esgotado (`ORACLE_POOL_WAIT_TIMEOUT_MS`). Erro 500: procure o `request_id` da resposta nos logs (`api_erro_inesperado`).
+- Prazo de cada consulta da API ao Oracle: `API_ORACLE_CALL_TIMEOUT_MS` (padrão 15 s, separado do consumer). Estourou → 503; consultas lentas recorrentes: veja o plano de execução das listagens (checklist da Q-17).
+- Em produção, `/docs`, `/redoc` e `/openapi.json` ficam desligados.
+- `/metrics` lê os snapshots dos processos pelo conjunto `ohip:metrics_index` (sem varrer o Redis).
+- `GET /api/v1/status` vem do cache do Redis (`ohip:api:status`, 5 s). Campos ainda não gravados pelo consumer (`subscription_id`, `last_message_at`, reconexões, `token_expires_at`) saem `null`/0 (ADR-0017).
+
 ## Hash da app key
 
 ```bash

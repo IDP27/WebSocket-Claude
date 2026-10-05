@@ -400,3 +400,27 @@ class MaskingPolicy:
                 new = MASK if item.new_value else item.new_value
             items.append(replace(item, old_value=old, new_value=new))
         return MaskedDetail(items=tuple(items), card_data_detected=card_detected)
+
+
+def mask_payload(payload_json: str, module_name: str, policy: MaskingPolicy) -> JsonValue:
+    """O ``newEvent`` gravado com os valores do ``detail`` mascarados (export da API).
+
+    Mesma regra de ``mask_detail``: ``oldValue``/``newValue`` de elemento sensível viram
+    ``***``. Os demais campos saem como gravados (o cartão já foi removido antes de gravar).
+    JSON ilegível → ``None``.
+    """
+    try:
+        data: JsonValue = json.loads(payload_json)
+    except ValueError:
+        return None
+    detail = data.get("detail") if isinstance(data, dict) else None
+    if not isinstance(detail, list):
+        return data
+    for entry in detail:
+        if not isinstance(entry, dict) or not isinstance(entry.get("elementName"), str):
+            continue
+        if policy.is_sensitive(str(entry["elementName"]), module_name):
+            for key in ("oldValue", "newValue"):
+                if entry.get(key):
+                    entry[key] = MASK
+    return data

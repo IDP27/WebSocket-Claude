@@ -263,8 +263,8 @@ Propriedades AMQP: `message_id=<uniqueEventId>`, `content_type=application/json`
 | Dedup do enricher | `ohip:processed:<message_id>` | configurável | marcado só depois do sucesso |
 | Recurso REST | `ohip:rest:<modulo>:<hotel>:<primaryKey>` | 30–60 s | coalesce rajadas |
 | LOV | `ohip:lov:<hotel>:<tipo>` | 24 h | |
-| Status da API | `ohip:api:status` | 5 s | protege o Oracle do polling do painel |
-| Métricas dos processos | `ohip:metrics:<processo>:<instancia>` | 60 s | snapshot dos contadores a cada 15 s (§10) |
+| Status da API | `ohip:api:status` | 5 s | protege o Oracle do polling do painel (mais cópia local e um cálculo por worker de cada vez) |
+| Métricas dos processos | `ohip:metrics:<processo>:<instancia>` + conjunto `ohip:metrics_index` | 60 s | snapshot dos contadores a cada 15 s (§10); a API lê pelo índice, sem `SCAN` |
 
 Redis fora: ingestão e publicação continuam; perdem-se só os atalhos e as métricas de contadores (alerta).
 
@@ -295,6 +295,7 @@ entrypoints ──▶ application ──▶ domain
 - `application/use_cases/token_provider.py` e `lease.py` (Fase 4): `TokenProvider` e `LeaseKeeper`.
 - Fase 5 (ADR-0015): `domain/protocol.py` (mensagens no formato do guia), `application/intake.py` (fila interna), `application/use_cases/consume_chain.py` (`ChainConsumer` e sessão), `adapters/ohip_ws/client.py` (`websockets`), `entrypoints/consumer.py` (processo `ohip-consumer`).
 - Fase 6 (ADR-0016): `adapters/rabbitmq/publisher.py` (confirms e topologia), `application/use_cases/publisher_service.py` (laço com lease), `entrypoints/publisher.py` (processo `ohip-publisher`) e `entrypoints/common.py`.
+- Fase 7 (ADR-0017): `application/use_cases/monitoring.py` (consultas com máscara) e o port `MonitoringStore`, `adapters/oracle/monitoring_store.py` (paginação por chave com `ROWNUM`), `InlineSession` em `adapters/oracle/database.py`, `adapters/redis/api_cache.py` (Redis síncrono da API), `adapters/rabbitmq/probe.py` (`/ready`) e `entrypoints/api/` (rotas `def`, autenticação, erros, `/metrics`, processo `ohip-api`).
 - `entrypoints/`: `consumer.py`, `publisher.py`, `enricher.py`, `api/`, `admin/`.
 
 `import-linter` (ADR-0005): `domain`/`application` sem `oracledb`, `websockets`, `fastapi`, `flask`, `aio_pika`, `redis`, `httpx`; `entrypoints.admin` sem `adapters.oracle`, `adapters.redis`, `oracledb`, `redis`.

@@ -1,7 +1,9 @@
 """Métricas: contadores em memória e snapshot periódico no Redis (ARCHITECTURE §10).
 
-Chave ``ohip:metrics:<processo>:<instancia>`` com TTL de 60 s, regravada a cada 15 s. A API
-(Fase 7) junta os snapshots no ``/metrics``. Redis fora: os contadores continuam em memória.
+Chave ``ohip:metrics:<processo>:<instancia>`` com TTL de 60 s, regravada a cada 15 s, e o nome
+da chave no conjunto ``ohip:metrics_index``. A API (Fase 7) lê o índice e junta os snapshots no
+``/metrics`` sem varrer o keyspace (``SCAN`` percorreria também as chaves ``ohip:seen:*``,
+ADR-0017). Redis fora: os contadores continuam em memória.
 """
 
 from __future__ import annotations
@@ -32,6 +34,9 @@ class InMemoryMetrics:
         ]
 
 
+METRICS_INDEX_KEY = "ohip:metrics_index"
+
+
 def metrics_key(process: str, instance: str) -> str:
     return f"ohip:metrics:{process}:{instance}"
 
@@ -47,7 +52,10 @@ class RedisMetricsPublisher:
         """Grava o snapshot. False se o Redis falhou (só log; tenta de novo no próximo ciclo)."""
         payload = json.dumps(self._metrics.snapshot(), separators=(",", ":"))
         try:
-            await self._redis.set(self._key, payload.encode(), ex=self._ttl_s)
+            pipe = self._redis.pipeline(transaction=False)
+            pipe.set(self._key, payload.encode(), ex=self._ttl_s)
+            pipe.sadd(METRICS_INDEX_KEY, self._key)  # a API limpa as chaves vencidas
+            await pipe.execute()
         except Exception:  # Redis é atalho
             log.warning("metricas_redis_indisponivel", exc_info=True)
             return False

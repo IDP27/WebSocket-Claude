@@ -537,3 +537,47 @@ def test_dlq_message_keeps_structured_elements_and_scrubs_the_rest() -> None:
     assert detail_out[0]["oldValue"] is None
     assert detail_out[1]["newValue"] == MASK
     assert detail_out[2]["newValue"] == MASK  # Maestro de 12 dígitos em elemento de cartão
+
+
+# ------------------------------------------------------------------ export (mask_payload)
+
+
+def test_mask_payload_masks_sensitive_detail_only() -> None:
+    from ohip_streaming.domain.masking import MASK, MaskingPolicy, mask_payload
+
+    payload = json.dumps(
+        {
+            "metadata": {"offset": "1", "uniqueEventId": "u"},
+            "detail": [
+                {"elementName": "FIRST NAME", "oldValue": "Ana", "newValue": "Maria"},
+                {"elementName": "ARRIVAL DATE", "oldValue": "", "newValue": "2026-10-11"},
+                {"elementName": "EMAIL", "oldValue": None, "newValue": "a@b.c"},
+                "lixo",
+                {"semNome": 1},
+            ],
+        }
+    )
+    masked = mask_payload(payload, "RESERVATION", MaskingPolicy())
+    assert isinstance(masked, dict)
+    detail = masked["detail"]
+    assert isinstance(detail, list)
+    assert detail[0] == {"elementName": "FIRST NAME", "oldValue": MASK, "newValue": MASK}
+    assert detail[1] == {"elementName": "ARRIVAL DATE", "oldValue": "", "newValue": "2026-10-11"}
+    assert detail[2] == {"elementName": "EMAIL", "oldValue": None, "newValue": MASK}
+    assert detail[3:] == ["lixo", {"semNome": 1}]
+
+
+def test_mask_payload_profile_is_deny_by_default() -> None:
+    from ohip_streaming.domain.masking import MASK, MaskingPolicy, mask_payload
+
+    payload = json.dumps({"detail": [{"elementName": "QUALQUER", "newValue": "x"}]})
+    masked = mask_payload(payload, "PROFILE", MaskingPolicy())
+    assert masked == {"detail": [{"elementName": "QUALQUER", "newValue": MASK}]}
+
+
+@pytest.mark.parametrize("payload", ["não é json", "[1, 2]", '{"detail": "texto"}'])
+def test_mask_payload_odd_shapes(payload: str) -> None:
+    from ohip_streaming.domain.masking import MaskingPolicy, mask_payload
+
+    result = mask_payload(payload, "RESERVATION", MaskingPolicy())
+    assert result == (None if payload == "não é json" else json.loads(payload))

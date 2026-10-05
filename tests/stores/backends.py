@@ -22,7 +22,12 @@ from pathlib import Path
 from typing import Any
 
 from pydantic import SecretStr
-from tests.fakes.memory import EXCHANGES, InMemoryDatabase, MemoryLeaseStore
+from tests.fakes.memory import (
+    EXCHANGES,
+    InMemoryDatabase,
+    MemoryLeaseStore,
+    MemoryMonitoringStore,
+)
 
 from ohip_streaming.adapters.oracle.database import (
     DedicatedSession,
@@ -32,6 +37,7 @@ from ohip_streaming.adapters.oracle.database import (
 )
 from ohip_streaming.adapters.oracle.event_store import OracleEventStore
 from ohip_streaming.adapters.oracle.lease_store import OracleLeaseStore
+from ohip_streaming.adapters.oracle.monitoring_store import OracleMonitoringStore
 from ohip_streaming.adapters.oracle.operations_store import OracleOperationsStore
 from ohip_streaming.adapters.oracle.outbox_store import OracleOutboxStore
 from ohip_streaming.adapters.oracle.replay_store import OracleReplayStore
@@ -40,6 +46,7 @@ from ohip_streaming.application.ports import (
     ConsumerStatusStore,
     EventStore,
     LeaseStore,
+    MonitoringStore,
     OperationsStore,
     OutboxStore,
     ReplayStore,
@@ -82,6 +89,7 @@ class Backend:
     operations: OperationsStore
     status: ConsumerStatusStore
     leases: LeaseStore
+    monitoring: MonitoringStore
 
     def acquire(self, lease: str) -> int:
         """Novo dono do lease: devolve o epoch novo (o anterior vira zumbi)."""
@@ -126,6 +134,7 @@ class MemoryBackend(Backend):
         self.db.leases.setdefault("publisher", 0)
         self.events = self.outbox = self.replay = self.operations = self.status = self.db
         self.leases = MemoryLeaseStore(self.db)
+        self.monitoring = MemoryMonitoringStore(self.db)
 
     def acquire(self, lease: str) -> int:
         return self.db.acquire(lease)
@@ -241,6 +250,7 @@ class OracleBackend(Backend):
         self.operations = OracleOperationsStore(pooled)
         self.status = OracleConsumerStatusStore(pooled)
         self.leases = OracleLeaseStore(pooled)
+        self.monitoring = OracleMonitoringStore(pooled)
         self._reset()
 
     @classmethod
