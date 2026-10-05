@@ -58,6 +58,9 @@ _LIBRARY_LOGGERS = (
     "aio_pika",
     "aiormq",
 )
+# Só WARNING para cima: o log INFO do httpx grava a URL completa, com a query string
+# (pode ter primary_key ou outros filtros do painel).
+_QUIET_LOGGERS = ("httpx", "httpcore")
 
 
 def _is_sensitive(key: str) -> bool:
@@ -161,6 +164,8 @@ def configure_logging(
         library_logger = logging.getLogger(name)
         library_logger.handlers = []
         library_logger.propagate = True
+    for name in _QUIET_LOGGERS:
+        logging.getLogger(name).setLevel(logging.WARNING)
 
 
 def get_logger(name: str | None = None) -> structlog.stdlib.BoundLogger:

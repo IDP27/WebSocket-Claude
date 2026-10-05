@@ -1,0 +1,38 @@
+{% extends "layout.html" %}
+{% from "macros.html" import next_page with context -%}
+{% block title %}Eventos{% endblock %}
+{% block content %}
+  <form method="get" action="{{ url_for('admin.events') }}" class="filters">
+    <label>Chain <input name="chain_code" value="{{ filters.chain_code or '' }}" maxlength="20"></label>
+    <label>Hotel <input name="hotel_id" value="{{ filters.hotel_id or '' }}" maxlength="50"></label>
+    <label>Evento <input name="event_name" value="{{ filters.event_name or '' }}" maxlength="100"></label>
+    <label>Módulo <input name="module_name" value="{{ filters.module_name or '' }}" maxlength="100"></label>
+    <label>Chave <input name="primary_key" value="{{ filters.primary_key or '' }}" maxlength="100"></label>
+    <label>De (UTC) <input type="datetime-local" step="1" name="from" value="{{ filters['from'] or '' }}"></label>
+    <label>Até (UTC) <input type="datetime-local" step="1" name="to" value="{{ filters.to or '' }}"></label>
+    <label>Status
+      <select name="processing_status">
+        <option value="">todos</option>
+        {% for s in ["RECEIVED", "IGNORED", "NORMALIZED", "UNMAPPED", "ENRICHED", "FAILED"] %}
+          <option value="{{ s }}" {% if filters.processing_status == s %}selected{% endif %}>{{ s }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <button type="submit">Buscar</button>
+  </form>
+  <table>
+    <thead><tr><th>Recebido</th><th>Chain</th><th>Hotel</th><th>Offset</th><th>Evento</th><th>Chave</th><th>Status</th></tr></thead>
+    <tbody>
+      {% for e in page["items"] %}
+        <tr>
+          <td><a href="{{ url_for('admin.event', unique_event_id=e.unique_event_id) }}">{{ e.received_at | when }}</a></td>
+          <td>{{ e.chain_code }}</td><td>{{ e.hotel_id or "—" }}</td><td>{{ e.offset }}</td>
+          <td>{{ e.event_name }}</td><td>{{ e.primary_key }}</td><td>{{ e.processing_status }}</td>
+        </tr>
+      {% else %}
+        <tr><td colspan="7">Nenhum evento encontrado.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {{ next_page('admin.events', next_args) }}
+{% endblock %}

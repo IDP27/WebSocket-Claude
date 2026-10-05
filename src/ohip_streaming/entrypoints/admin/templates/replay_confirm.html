@@ -1,0 +1,20 @@
+{% extends "layout.html" %}
+{% from "macros.html" import csrf_field with context -%}
+{% block title %}Confirmar replay{% endblock %}
+{% block content %}
+  <h1>Confirmar replay</h1>
+  <dl>
+    <dt>Chain</dt><dd>{{ form.chain_code }}</dd>
+    <dt>A partir do offset</dt><dd>{{ form.from_offset }} (último já processado antes da lacuna)</dd>
+    <dt>Motivo</dt><dd>{{ form.reason }}</dd>
+  </dl>
+  <p class="warning">⚠ O consumer fará uma reconexão controlada. Eventos já gravados serão ignorados pela deduplicação.</p>
+  <form method="post" action="{{ url_for('admin.replay_confirm') }}" class="stack">
+    {{ csrf_field() }}
+    <input type="hidden" name="chain_code" value="{{ form.chain_code }}">
+    <input type="hidden" name="from_offset" value="{{ form.from_offset }}">
+    <input type="hidden" name="reason" value="{{ form.reason }}">
+    <label>Digite <strong>{{ form.chain_code }}</strong> para confirmar <input name="confirm" required autocomplete="off"></label>
+    <p><a href="{{ url_for('admin.operations') }}">Cancelar</a> <button type="submit">Confirmar</button></p>
+  </form>
+{% endblock %}

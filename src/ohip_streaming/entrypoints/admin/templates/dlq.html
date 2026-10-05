@@ -1,0 +1,24 @@
+{% extends "layout.html" %}
+{% block title %}DLQ{% endblock %}
+{% block content %}
+  <form method="get" action="{{ url_for('admin.dlq') }}" class="filters">
+    <label>Estágio
+      <select name="stage">
+        <option value="">todos</option>
+        {% for s in ["CONSUME", "PUBLISH", "NORMALIZE", "ENRICH"] %}
+          <option value="{{ s }}" {% if filters.stage == s %}selected{% endif %}>{{ s }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Chain <input name="chain_code" value="{{ filters.chain_code or '' }}" maxlength="20"></label>
+    <label>Itens
+      <select name="resolved">
+        <option value="false" {% if filters.resolved == "false" %}selected{% endif %}>abertos</option>
+        <option value="true" {% if filters.resolved == "true" %}selected{% endif %}>resolvidos</option>
+        <option value="all" {% if filters.resolved == "all" %}selected{% endif %}>todos</option>
+      </select>
+    </label>
+    <button type="submit">Filtrar</button>
+  </form>
+  {% include "_dlq.html" %}
+{% endblock %}

@@ -1,6 +1,6 @@
 # Painel operacional — `ohip-admin` (Flask)
 
-> Status: **Proposta aprovada na Fase 0 (2026-10-01)**. Implementação na Fase 8.
+> Status: **Proposta aprovada na Fase 0 (2026-10-01); implementada na Fase 8 (ADR-0018).** Desvios da proposta: a confirmação do replay é uma segunda página (não um modal, porque não há JavaScript próprio) e a DLQ abre mostrando só os itens abertos.
 
 ## Princípios
 
@@ -24,7 +24,8 @@
 - `layout.html`: cabeçalho com ambiente (HOMOLOGAÇÃO em amarelo, PRODUÇÃO em vermelho), usuário e navegação.
 - `status_card(chain)`: estado com cor e texto (nunca só cor), métricas e "atualizado há N s".
 - `paged_table(columns, rows, cursor)`: tabela com paginação por cursor.
-- `confirm_modal(action, expected_text)`: modal que exige digitar o texto esperado (ex.: código da chain).
+- Confirmação do replay: página `replay_confirm.html`, que exige digitar o código da chain (no lugar do modal previsto; ADR-0018 §5).
+- `post_button(action, label)` e `csrf_field()`: todo POST leva o token CSRF da sessão.
 - `flash_messages()`.
 
 ## Wireframes

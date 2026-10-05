@@ -2,11 +2,11 @@
 
 Consumidor de eventos do OPERA Cloud pela **OHIP Streaming API** (WebSocket + GraphQL). Grava cada evento no Oracle 11g sem perda nem duplicidade e publica no RabbitMQ via outbox para BI, integrações e n8n.
 
-> **Status: Fases 0 a 7 concluídas** (concepção, esqueleto, domínio e casos de uso, adapter Oracle, token OAuth + lease + Redis, consumer WebSocket, publisher outbox e API de controle FastAPI). Próxima: Fase 8 (painel Flask). Pendentes de ambiente: Oracle 11g de teste (Q-17), sandbox OHIP e RabbitMQ de teste. Veja [docs/PLAN.md](docs/PLAN.md).
+> **Status: Fases 0 a 8 concluídas** (concepção, esqueleto, domínio e casos de uso, adapter Oracle, token OAuth + lease + Redis, consumer WebSocket, publisher outbox, API de controle FastAPI e painel Flask). Próxima: Fase 9 (enricher). Pendentes de ambiente: Oracle 11g de teste (Q-17), sandbox OHIP e RabbitMQ de teste. Veja [docs/PLAN.md](docs/PLAN.md).
 >
-> **Processos**: `ohip-consumer` (WebSocket OHIP → Oracle), `ohip-publisher` (outbox → RabbitMQ) e `ohip-api` (API de controle, [docs/API.md](docs/API.md)), scripts do `pyproject.toml`.
+> **Processos**: `ohip-consumer` (WebSocket OHIP → Oracle), `ohip-publisher` (outbox → RabbitMQ) `ohip-api` (API de controle, [docs/API.md](docs/API.md)) e `ohip-admin` (painel em `/admin`, [docs/UI.md](docs/UI.md)), scripts do `pyproject.toml`.
 >
-> **Endpoints**: a API de controle está em [docs/API.md](docs/API.md) (OpenAPI em `/docs` fora de produção); o painel é a Fase 8. As APIs da Oracle que o projeto chama estão em [postman/](postman/README.md).
+> **Endpoints**: a API de controle está em [docs/API.md](docs/API.md) (OpenAPI em `/docs` fora de produção); o painel fica em `/admin` atrás do Nginx (login no Nginx/SSO, Q-5). As APIs da Oracle que o projeto chama estão em [postman/](postman/README.md).
 
 ## Ambiente de desenvolvimento
 

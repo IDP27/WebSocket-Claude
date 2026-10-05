@@ -1,0 +1,35 @@
+/* Painel ohip-admin. Sem estilos inline (CSP style-src 'self'). */
+:root { --ok: #1b7a3a; --warn: #9a6700; --bad: #b42318; --line: #d0d7de; --muted: #57606a; }
+* { box-sizing: border-box; }
+body { margin: 0; font: 14px/1.45 system-ui, sans-serif; color: #1f2328; background: #fff; }
+header.top { display: flex; flex-wrap: wrap; gap: 8px 24px; align-items: center; padding: 10px 16px; border-bottom: 4px solid var(--line); }
+body.env-homologacao header.top { border-bottom-color: #d4a72c; }
+body.env-producao header.top { border-bottom-color: var(--bad); }
+.brand { font-weight: 600; }
+.env { padding: 1px 6px; border-radius: 4px; background: #eaeef2; }
+body.env-homologacao .env { background: #fff1b8; }
+body.env-producao .env { background: var(--bad); color: #fff; }
+.who { margin-left: auto; color: var(--muted); }
+nav a { margin-right: 14px; }
+main { padding: 16px; max-width: 1200px; }
+.cards { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 12px; }
+.card { border: 1px solid var(--line); border-radius: 6px; padding: 10px 14px; min-width: 280px; flex: 1; }
+.card h2 { font-size: 16px; margin: 0 0 8px; display: flex; justify-content: space-between; gap: 8px; }
+dl { display: grid; grid-template-columns: max-content 1fr; gap: 2px 12px; margin: 0; }
+dt { color: var(--muted); }
+dd { margin: 0; }
+.badge { font-size: 12px; padding: 1px 8px; border-radius: 10px; color: #fff; }
+.badge.ok { background: var(--ok); }
+.badge.warn { background: var(--warn); }
+.badge.bad { background: var(--bad); }
+table { border-collapse: collapse; width: 100%; margin: 8px 0 16px; }
+th, td { border-bottom: 1px solid var(--line); padding: 4px 6px; text-align: left; vertical-align: top; }
+.filters, .stack { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: end; margin-bottom: 12px; }
+.stack { flex-direction: column; align-items: start; }
+.flash { padding: 8px 12px; border-radius: 4px; }
+.flash.ok { background: #dafbe1; }
+.flash.bad { background: #ffebe9; }
+.warning { background: #fff8c5; padding: 6px 10px; border-radius: 4px; }
+.inline { display: inline; }
+.button, button { padding: 4px 10px; }
+.muted, .updated { color: var(--muted); }

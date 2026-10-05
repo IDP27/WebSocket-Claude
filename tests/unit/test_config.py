@@ -285,9 +285,13 @@ def test_load_settings_is_cached_per_class(monkeypatch: pytest.MonkeyPatch) -> N
 
 
 def _settings_classes() -> list[type[BaseSettings]]:
+    """Classes de configuração dos processos e do painel (que tem as suas, ADR-0018)."""
+    from ohip_streaming.entrypoints.admin import settings as panel
+
     return [
         value
-        for value in vars(config).values()
+        for module in (config, panel)
+        for value in vars(module).values()
         if isinstance(value, type) and issubclass(value, BaseSettings) and value is not BaseSettings
     ]
 

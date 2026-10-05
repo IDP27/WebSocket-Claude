@@ -1,0 +1,23 @@
+{% from "macros.html" import status_card with context -%}
+<div id="overview" hx-get="{{ url_for('admin.fragment_overview') }}" hx-trigger="every {{ refresh_s }}s" hx-swap="outerHTML">
+  <div class="cards">
+    {% for chain in chains %}
+      {{ status_card(chain, now) }}
+    {% else %}
+      <p>Nenhuma chain provisionada.</p>
+    {% endfor %}
+  </div>
+  <div class="cards">
+    <section class="card">
+      <h2>Outbox</h2>
+      <p>Pendentes {{ totals.pending }} · Falhas {{ totals.failed }}</p>
+      <p>Mais antiga: {{ "%d s" | format(totals.oldest) if totals.oldest else "—" }}</p>
+    </section>
+    <section class="card">
+      <h2>DLQ aberta</h2>
+      <p>{% for stage, count in totals.dlq.items() %}{{ stage }} {{ count }}{% if not loop.last %} · {% endif %}{% endfor %}</p>
+      <p><a href="{{ url_for('admin.dlq') }}">ver DLQ</a></p>
+    </section>
+  </div>
+  <p class="updated">Dados de {{ status.generated_at | when }} (atualizado {{ status.generated_at | ago(now) }})</p>
+</div>

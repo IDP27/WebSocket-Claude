@@ -1,0 +1,47 @@
+{% extends "layout.html" %}
+{% from "macros.html" import post_button with context -%}
+{% block title %}Evento{% endblock %}
+{% block content %}
+  <h1>{{ event.event_name }} · {{ event.unique_event_id }}</h1>
+  <p>Chain {{ event.chain_code }} · Hotel {{ event.hotel_id or "—" }} · Offset {{ event.offset }} · Chave {{ event.primary_key }} · Módulo {{ event.module_name }}</p>
+  <p>Evento {{ event.event_ts | when }} · Recebido {{ event.received_at | when }} · Gravado {{ event.persisted_at | when }}</p>
+  <p>Status {{ event.processing_status }} · Routing key {{ event.routing_key }}{% if event.masked %} · valores pessoais mascarados{% endif %}</p>
+  <table>
+    <thead><tr><th>Elemento</th><th>Antes</th><th>Depois</th></tr></thead>
+    <tbody>
+      {% for d in event.detail %}
+        <tr><td>{{ d.element_name }}</td><td>{{ d.old_value if d.old_value is not none else "" }}</td><td>{{ d.new_value if d.new_value is not none else "" }}</td></tr>
+      {% else %}
+        <tr><td colspan="3">Sem detail.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <h2>Outbox</h2>
+  <table>
+    <thead><tr><th>#</th><th>Exchange</th><th>Status</th><th>Tentativas</th><th>Último erro</th><th>Enviada</th></tr></thead>
+    <tbody>
+      {% for o in event.outbox %}
+        <tr><td>{{ o.id }}</td><td>{{ o.exchange_name }}</td><td>{{ o.status }}</td><td>{{ o.attempts }}</td><td>{{ o.last_error or "" }}</td><td>{{ o.sent_at | when }}</td></tr>
+      {% else %}
+        <tr><td colspan="6">Sem linhas na outbox.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <h2>DLQ</h2>
+  <table>
+    <thead><tr><th>#</th><th>Estágio</th><th>Erro</th><th>Resolução</th></tr></thead>
+    <tbody>
+      {% for d in event.dlq %}
+        <tr><td>{{ d.id }}</td><td>{{ d.stage }}</td><td>{{ d.error_message }}</td><td>{{ d.resolution or "aberto" }}</td></tr>
+      {% else %}
+        <tr><td colspan="4">Nenhum item na DLQ.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% if is_admin %}
+    <p class="actions">
+      {{ post_button(url_for('admin.reprocess_event', unique_event_id=event.unique_event_id), "Reprocessar") }}
+      <a class="button" href="{{ url_for('admin.export_event', unique_event_id=event.unique_event_id) }}">Exportar JSON</a>
+    </p>
+  {% endif %}
+{% endblock %}

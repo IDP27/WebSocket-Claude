@@ -1,0 +1,20 @@
+{% from "macros.html" import next_page, post_button with context -%}
+<div id="dlq" hx-get="{{ url_for('admin.fragment_dlq', **filters) }}" hx-trigger="every {{ refresh_s }}s" hx-swap="outerHTML">
+  <table>
+    <thead><tr><th>ID</th><th>Estágio</th><th>Chain</th><th>Evento</th><th>Erro</th><th>Tent.</th><th>Situação</th><th>Ação</th></tr></thead>
+    <tbody>
+      {% for d in page["items"] %}
+        <tr>
+          <td>{{ d.id }}</td><td>{{ d.stage }}</td><td>{{ d.chain_code or "—" }}</td>
+          <td>{% if d.unique_event_id and d.event_raw_id %}<a href="{{ url_for('admin.event', unique_event_id=d.unique_event_id) }}">{{ d.unique_event_id }}</a>{% else %}{{ d.unique_event_id or "—" }}{% endif %}</td>
+          <td>{{ d.error_message }}</td><td>{{ d.attempts }}</td>
+          <td>{% if d.resolution %}{{ d.resolution }} por {{ d.resolved_by }}{% elif d.retry_requested_at %}retry pedido por {{ d.retry_requested_by }}{% else %}aberto{% endif %}</td>
+          <td>{% if is_admin and not d.resolution and not d.retry_requested_at %}{{ post_button(url_for('admin.retry_dlq', item_id=d.id), "Reprocessar") }}{% endif %}</td>
+        </tr>
+      {% else %}
+        <tr><td colspan="8">Nenhum item.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {{ next_page('admin.dlq', next_args) }}
+</div>

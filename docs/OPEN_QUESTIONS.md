@@ -11,7 +11,7 @@
 | Q-2 | Qual o primeiro caso de uso de negócio? | Latência alvo, obrigatoriedade do enriquecimento | Enriquecimento desligado; p95 ≤ 5 s só até o Oracle |
 | Q-3 | ~~Versão do Oracle~~ | — | **Respondida: Oracle 11g** |
 | Q-4 | A empresa acessa o OHIP como **cliente OPERA** ou **parceira**? | Custo (parceiro paga US$ 10 por 100 mil eventos), escopo da app (app de cliente vale para **uma** chain) | Cliente; uma app key por chain |
-| Q-5 | Papel do Flask ao lado do FastAPI e forma de login (Nginx básico, SSO, LDAP)? | Fase 8 | Painel interno via API; usuário/grupo vindos de headers do Nginx |
+| Q-5 | Papel do Flask ao lado do FastAPI e forma de login (Nginx básico, SSO, LDAP)? | Fase 8 | Painel interno via API; usuário/grupo vindos de headers do Nginx. **Implementado com o padrão (ADR-0018):** nomes dos headers e dos grupos configuráveis (`ADMIN_USER_HEADER`, `ADMIN_GROUPS_HEADER`, `ADMIN_ADMIN_GROUP`, `ADMIN_READ_GROUP`); falta decidir o provedor de login no Nginx (Fase 10) |
 | Q-6 | Quantas VMs (homologação/produção) e se haverá ativo/passivo desde o início | Fase 10 (deploy) | 1 VM por ambiente, `Restart=always`; mecanismo de trava já pronto para passiva (ADR-0008) |
 | Q-7 | Ferramenta de alertas (e-mail, Teams, Grafana, Zabbix)? | Fase 10 | `/metrics` Prometheus + regras documentadas no RUNBOOK |
 | Q-8 | Pico estimado de eventos por dia (e por minuto no fechamento do dia)? | RNF-06, RNF-13 (teste de carga) | 200 mil/dia, pico 300/min por chain (hipótese a substituir) |

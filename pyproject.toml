@@ -23,6 +23,7 @@ dependencies = [
 ohip-consumer = "ohip_streaming.entrypoints.consumer:main"
 ohip-publisher = "ohip_streaming.entrypoints.publisher:main"
 ohip-api = "ohip_streaming.entrypoints.api.server:main"
+ohip-admin = "ohip_streaming.entrypoints.admin.server:main"
 
 [tool.poetry]
 packages = [{ include = "ohip_streaming", from = "src" }]
@@ -84,6 +85,11 @@ warn_unreachable = true
 [[tool.mypy.overrides]]
 module = ["tests.*"]
 disallow_untyped_defs = false
+
+[[tool.mypy.overrides]]
+# Gunicorn não publica tipos (o painel só usa BaseApplication, ADR-0018).
+module = ["gunicorn.*"]
+ignore_missing_imports = true
 
 # --------------------------------------------------------------------------- pytest
 [tool.pytest.ini_options]

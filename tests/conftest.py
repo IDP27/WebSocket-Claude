@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from ohip_streaming.config import load_settings
+from ohip_streaming.entrypoints.admin.settings import load_panel_settings
 
 _PREFIXES = (
     "APP_",
@@ -21,6 +22,7 @@ _PREFIXES = (
     "LOG_",
     "LEASE_",
     "PUBLISHER_",
+    "ADMIN_",
 )
 
 
@@ -32,5 +34,7 @@ def isolated_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[No
             monkeypatch.delenv(name)
     monkeypatch.chdir(tmp_path)
     load_settings.cache_clear()
+    load_panel_settings.cache_clear()
     yield
     load_settings.cache_clear()
+    load_panel_settings.cache_clear()

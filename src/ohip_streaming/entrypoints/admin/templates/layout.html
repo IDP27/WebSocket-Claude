@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  {# HTMX sem estilos inline (CSP style-src 'self'), ADR-0018 #}
+  <meta name="htmx-config" content='{"includeIndicatorStyles": false, "allowEval": false}'>
+  <title>{% block title %}Painel{% endblock %} · OHIP Streaming</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='admin.css') }}">
+  <script src="{{ url_for('static', filename='htmx.min.js') }}" integrity="{{ htmx_integrity }}" defer></script>
+</head>
+<body class="env-{{ environment }}">
+  <header class="top">
+    <div class="brand">OHIP Streaming · <span class="env">{{ environment | upper }}</span></div>
+    {% if caller %}
+    <div class="who">{{ caller.user }} <span class="role">({{ caller.role.value }})</span></div>
+    {% endif %}
+    <nav>
+      <a href="{{ url_for('admin.overview') }}">Visão geral</a>
+      <a href="{{ url_for('admin.events') }}">Eventos</a>
+      <a href="{{ url_for('admin.dlq') }}">DLQ</a>
+      <a href="{{ url_for('admin.operations') }}">Operações</a>
+    </nav>
+  </header>
+  <main>
+    {% from "macros.html" import flash_messages with context -%}
+    {{ flash_messages() }}
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

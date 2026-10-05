@@ -1,0 +1,3 @@
+<div hx-get="{{ url_for(endpoint, **args) }}" hx-trigger="every {{ refresh_s }}s" hx-swap="outerHTML">
+  <p class="flash bad" role="alert">{{ message }} (request_id {{ request_id }})</p>
+</div>

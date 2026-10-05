@@ -61,6 +61,18 @@ Os cenários de `tests/stores/` rodam no fake e, com estas variáveis, num Oracl
 - `/metrics` lê os snapshots dos processos pelo conjunto `ohip:metrics_index` (sem varrer o Redis).
 - `GET /api/v1/status` vem do cache do Redis (`ohip:api:status`, 5 s). Campos ainda não gravados pelo consumer (`subscription_id`, `last_message_at`, reconexões, `token_expires_at`) saem `null`/0 (ADR-0017).
 
+## Painel (`ohip-admin`)
+
+- Comando: `ohip-admin` (Gunicorn com `ADMIN_WORKERS` workers síncronos em `ADMIN_HOST`:`ADMIN_PORT`, padrão `127.0.0.1:8081`). Fala só com a API (`ADMIN_API_BASE_URL`); nunca recebe credenciais do Oracle, do Redis ou do OHIP.
+- Tokens: `ADMIN_API_READ_TOKEN` e `ADMIN_API_ADMIN_TOKEN` são os tokens **em claro** cujo SHA-256 está em `API_SERVICE_TOKENS` da API (seção acima). `ADMIN_SECRET_KEY`: 32+ caracteres aleatórios (`python -c 'import secrets; print(secrets.token_urlsafe(48))'`); trocar a chave derruba as sessões abertas (os formulários abertos precisam ser recarregados).
+- Login (Q-5, padrão): o Nginx autentica e **sobrescreve** `X-Forwarded-User` e `X-Forwarded-Groups` (grupos separados por vírgula) em toda requisição para `/admin`, inclusive apagando o que vier do navegador. Grupo `ADMIN_ADMIN_GROUP` (`ohip-admin`) = perfil admin; `ADMIN_READ_GROUP` (`ohip-read`) = leitura; outros = 403. Sem o header de usuário, o painel responde 401 (Nginx mal configurado).
+- O Nginx precisa **sobrescrever** os dois headers em toda requisição (`proxy_set_header X-Forwarded-User $usuario; proxy_set_header X-Forwarded-Groups $grupos;`, inclusive vazios), e o usuário precisa ser ASCII com até 100 caracteres (senão o painel mostra 400 "Usuário não suportado").
+- Painel fora do endereço local (`ADMIN_HOST` ≠ `127.0.0.1`/`::1`): obrigatório `ADMIN_PROXY_SECRET` (32+ caracteres), enviado pelo Nginx em `X-Admin-Proxy-Secret` (`proxy_set_header`). Mesmo local, o segredo é recomendado: impede outros processos da VM de chamar o painel com headers forjados.
+- Login vencido: o Nginx deve responder 401 (não 302) quando a requisição tiver `HX-Request: true`; o bloco para de atualizar e o "atualizado há" denuncia. O painel, se receber a requisição sem usuário, pede ao navegador para recarregar a página (`HX-Refresh`).
+- HTMX: `static/htmx.min.js` (2.0.11) vai junto com o código, com o hash publicado em htmx.org (`static/HTMX_PROVENANCE.md`); o teste do painel confere o arquivo. Para atualizar, troque o arquivo e o `HTMX_INTEGRITY` em `admin/app.py` com o hash publicado da nova versão.
+- Página 503 "A API de controle não respondeu": confira `ohip-api` (`/ready`). Página 502 "A API recusou o token do painel": os tokens do painel não batem com os hashes da API.
+- Logs: `painel_requisicao` (rota sem query string, usuário, perfil, `request_id`, que também vai para a API em `X-Request-ID`), `painel_erro_api`, `painel_csrf_recusado`.
+
 ## Hash da app key
 
 ```bash

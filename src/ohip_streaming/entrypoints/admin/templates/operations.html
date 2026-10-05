@@ -1,0 +1,24 @@
+{% extends "layout.html" %}
+{% from "macros.html" import csrf_field with context -%}
+{% block title %}Operações{% endblock %}
+{% block content %}
+  <h1>Replay por offset</h1>
+  {% if is_admin %}
+  <form method="post" action="{{ url_for('admin.replay_review') }}" class="stack">
+    {{ csrf_field() }}
+    <label>Chain
+      <select name="chain_code" required>
+        {% for c in chains %}<option value="{{ c.chain_code }}">{{ c.chain_code }} (último offset {{ c.last_offset or "—" }})</option>{% endfor %}
+      </select>
+    </label>
+    <label>Último offset bom antes da lacuna <input name="from_offset" required maxlength="20" inputmode="numeric" pattern="[0-9]{1,20}"></label>
+    <label>Motivo <input name="reason" required maxlength="500"></label>
+    <p class="warning">⚠ O consumer fará uma reconexão controlada (cerca de 10 a 20 s sem eventos). Eventos já gravados serão ignorados. Retenção do OHIP: 7 dias.</p>
+    <button type="submit">Pedir replay…</button>
+  </form>
+  {% else %}
+    <p>Pedidos de replay exigem o grupo admin.</p>
+  {% endif %}
+  <h2>Histórico</h2>
+  {% include "_replays.html" %}
+{% endblock %}

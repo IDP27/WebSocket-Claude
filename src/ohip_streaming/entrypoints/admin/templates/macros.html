@@ -1,0 +1,42 @@
+{# Componentes do painel (docs/UI.md). Estado sempre com texto, nunca só cor. #}
+
+{% macro flash_messages() %}
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% for category, message in messages %}
+      <p class="flash {{ category }}" role="status">{{ message }}</p>
+    {% endfor %}
+  {% endwith %}
+{% endmacro %}
+
+{% macro status_card(chain, now) %}
+  {% set label, tone = state_label(chain.state) %}
+  <section class="card">
+    <h2>{{ chain.chain_code }} <span class="badge {{ tone }}">● {{ label }}</span></h2>
+    <dl>
+      <dt>Último offset</dt><dd>{{ chain.last_offset or "—" }}</dd>
+      <dt>Última msg</dt><dd>{{ chain.last_message_at | ago(now) }}</dd>
+      <dt>Atraso p95 5m</dt><dd>{{ "%.1f s" | format(chain.lag_seconds_p95_5m) if chain.lag_seconds_p95_5m is not none else "—" }}</dd>
+      <dt>Eventos/min</dt><dd>{{ chain.events_per_minute }}</dd>
+      <dt>Reconexões</dt><dd>{{ chain.reconnects_total }} · falhas seguidas {{ chain.consecutive_failures }}</dd>
+      {% if chain.last_close %}
+      <dt>Último fechamento</dt><dd>{{ chain.last_close.code or "—" }} {{ chain.last_close.reason or "" }} ({{ chain.last_close.at | ago(now) }})</dd>
+      {% endif %}
+      {% if chain.next_attempt_at %}<dt>Próx. tentativa</dt><dd>{{ chain.next_attempt_at | when }}</dd>{% endif %}
+      {% if chain.token_expires_at %}<dt>Token expira</dt><dd>{{ chain.token_expires_at | when }}</dd>{% endif %}
+    </dl>
+  </section>
+{% endmacro %}
+
+{% macro next_page(endpoint, next_args) %}
+  {% if next_args %}
+    <p class="pager"><a href="{{ url_for(endpoint, **next_args) }}">Próxima página ▸</a></p>
+  {% endif %}
+{% endmacro %}
+
+{% macro csrf_field() %}<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">{% endmacro %}
+
+{% macro post_button(action, label) %}
+  <form method="post" action="{{ action }}" class="inline">
+    {{ csrf_field() }}<button type="submit">{{ label }}</button>
+  </form>
+{% endmacro %}

@@ -252,3 +252,11 @@ async def test_run_in_executor_keeps_correlation_context(
     (record,) = json_lines(capsys)
     assert record["unique_event_id"] == "E1"
     assert record["size"] == 3
+
+
+def test_httpx_request_lines_are_not_logged(capsys: pytest.CaptureFixture[str]) -> None:
+    """O INFO do httpx grava a URL com a query string; fica de fora (ADR-0018)."""
+    configure()
+    logging.getLogger("httpx").info("HTTP Request: GET http://api/x?primary_key=123")
+    logging.getLogger("httpx").warning("aviso do httpx")
+    assert [r["event"] for r in json_lines(capsys)] == ["aviso do httpx"]
