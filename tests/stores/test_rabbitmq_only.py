@@ -129,3 +129,39 @@ async def test_connection_drop_does_not_blame_two_chains(topology: Topology) -> 
         assert await pub.publish(replace(b, message_id="b-fim")) is PublishOutcome.ACKED
     finally:
         await pub.close()
+
+
+async def test_enricher_consumer_receives_reprocess_and_bound_events(topology: Topology) -> None:
+    """O enricher declara a fila igual ao publisher, liga as routing keys e diferencia
+    reprocessamento (ADR-0016, ADR-0019)."""
+    from ohip_streaming.adapters.rabbitmq.consumer import AioPikaQueueConsumer, ConsumerOptions
+    from ohip_streaming.application.use_cases.enrich_event import InboundMessage
+    from ohip_streaming.application.use_cases.enricher_service import Disposition
+
+    assert _URL is not None
+    pub = AioPikaPublisher(url=_URL, topology=topology)
+    try:
+        assert await pub.publish(message(topology.reprocess_exchange, "ohip.rsv.X", "r1")) is (
+            PublishOutcome.ACKED
+        )
+        options = ConsumerOptions(
+            queue=topology.enricher_queue,
+            events_exchange=topology.events_exchange,
+            reprocess_exchange=topology.reprocess_exchange,
+            bindings=("ohip.rsv.#",),
+        )
+        received: list[InboundMessage] = []
+        stop = asyncio.Event()
+
+        async def handler(inbound: InboundMessage) -> Disposition:
+            received.append(inbound)
+            if inbound.message_id == "r1":  # depois da binding, publica o evento normal
+                await pub.publish(message(topology.events_exchange, "ohip.rsv.Y", "e1"))
+            else:
+                stop.set()
+            return Disposition.ACK
+
+        await asyncio.wait_for(AioPikaQueueConsumer(_URL, options).run(handler, stop), 15)
+        assert [(m.message_id, m.is_reprocess) for m in received] == [("r1", True), ("e1", False)]
+    finally:
+        await pub.close()

@@ -23,6 +23,7 @@ from tests.fakes.memory import (
 
 from ohip_streaming.application.errors import (
     BatchFailedError,
+    EnrichmentFailedError,
     InvalidOperationError,
     LeaseLostError,
     NotFoundError,
@@ -585,7 +586,7 @@ async def test_enrich_with_rest_resource() -> None:
     use_case, _, _, fetcher = enrich(db, needs_resource=True)
 
     assert await use_case.execute(message(raw_id)) is EnrichOutcome.ENRICHED
-    assert fetcher.calls == [("RESERVATION", "HOTEL1", "123456")]
+    assert fetcher.calls == [("CHAIN1", "RESERVATION", "HOTEL1", "123456")]
     ((values, _),) = db.domain_tables.values()
     assert values == {"status": "RESERVED"}
 
@@ -645,10 +646,13 @@ async def test_enrich_apply_is_atomic_and_message_stays_unprocessed_on_failure()
     db = await seeded_db(1)
     raw_id = next(iter(db.raw))
     use_case, dedup, _, _ = enrich(db)
-    db.fail_apply = [RuntimeError("ORA-03113")]
+    db.fail_apply = [StoreUnavailableError("ORA-03113"), RuntimeError("regra quebrada")]
 
-    with pytest.raises(RuntimeError):
+    with pytest.raises(StoreUnavailableError):  # infraestrutura: sobe como está
         await use_case.execute(message(raw_id))
+    with pytest.raises(EnrichmentFailedError) as info:  # falha da mensagem: classificada
+        await use_case.execute(message(raw_id))
+    assert (info.value.raw_event_id, info.value.stage) == (raw_id, "NORMALIZE")
 
     assert db.domain_tables == {}
     assert db.raw[raw_id].status is ProcessingStatus.RECEIVED

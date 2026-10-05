@@ -35,6 +35,7 @@ from ohip_streaming.adapters.oracle.database import (
     PooledSession,
     open_pool,
 )
+from ohip_streaming.adapters.oracle.enrichment_store import OracleEnrichmentStore
 from ohip_streaming.adapters.oracle.event_store import OracleEventStore
 from ohip_streaming.adapters.oracle.lease_store import OracleLeaseStore
 from ohip_streaming.adapters.oracle.monitoring_store import OracleMonitoringStore
@@ -44,6 +45,7 @@ from ohip_streaming.adapters.oracle.replay_store import OracleReplayStore
 from ohip_streaming.adapters.oracle.status_store import OracleConsumerStatusStore
 from ohip_streaming.application.ports import (
     ConsumerStatusStore,
+    EnrichmentStore,
     EventStore,
     LeaseStore,
     MonitoringStore,
@@ -90,6 +92,7 @@ class Backend:
     status: ConsumerStatusStore
     leases: LeaseStore
     monitoring: MonitoringStore
+    enrichment: EnrichmentStore
 
     def acquire(self, lease: str) -> int:
         """Novo dono do lease: devolve o epoch novo (o anterior vira zumbi)."""
@@ -135,6 +138,7 @@ class MemoryBackend(Backend):
         self.events = self.outbox = self.replay = self.operations = self.status = self.db
         self.leases = MemoryLeaseStore(self.db)
         self.monitoring = MemoryMonitoringStore(self.db)
+        self.enrichment = self.db
 
     def acquire(self, lease: str) -> int:
         return self.db.acquire(lease)
@@ -251,6 +255,7 @@ class OracleBackend(Backend):
         self.status = OracleConsumerStatusStore(pooled)
         self.leases = OracleLeaseStore(pooled)
         self.monitoring = OracleMonitoringStore(pooled)
+        self.enrichment = OracleEnrichmentStore(pooled, code_version="test")
         self._reset()
 
     @classmethod

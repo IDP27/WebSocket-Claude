@@ -438,3 +438,41 @@ async def test_monitoring_dlq_filters(backend: Backend) -> None:
         DlqQuery(chain_code=CHAIN, resolved=True), PageRequest()
     )
     assert resolved.items == ()
+
+
+# ------------------------------------------------------------------ enricher (Fase 9)
+
+
+async def test_enricher_marks_status_and_dlq(backend: Backend) -> None:
+    """Sem regras (Q-1): só o processing_status e a DLQ; nenhuma tabela de domínio."""
+    backend.acquire(f"consumer:{CHAIN}")
+    unmapped, failed = event(1), event(2)
+    await persist(backend, unmapped, failed)
+    record = await backend.monitoring.event(unmapped.unique_event_id)
+    assert record is not None
+    assert (
+        await backend.enrichment.apply(record.stored.raw_event_id, (), ProcessingStatus.UNMAPPED)
+        == 0
+    )
+    record = await backend.monitoring.event(unmapped.unique_event_id)
+    assert record is not None
+    assert record.stored.status is ProcessingStatus.UNMAPPED
+
+    failing = await backend.monitoring.event(failed.unique_event_id)
+    assert failing is not None
+    loaded = await backend.enrichment.get_event(failing.stored.raw_event_id)
+    assert loaded is not None
+    assert loaded.event.unique_event_id == failed.unique_event_id
+    await backend.enrichment.add_dlq(
+        failing.stored.raw_event_id, DlqStage.ENRICH, "ResourceRejectedError", "HTTP 403"
+    )
+    (item,) = backend.dlq_items(CHAIN)
+    assert (item.stage, item.unique_event_id, item.offset) == (
+        "ENRICH",
+        failed.unique_event_id,
+        "2",
+    )
+    assert "HTTP 403" in item.error
+    failing = await backend.monitoring.event(failed.unique_event_id)
+    assert failing is not None
+    assert failing.stored.status is ProcessingStatus.FAILED

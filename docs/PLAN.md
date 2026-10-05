@@ -14,7 +14,7 @@
 | 6. Publisher outbox ✅ aprovada (validação em RabbitMQ real pendente) | Lotes por chain, publisher confirms, backoff com cabeça da fila, DLQ; testes de contrato | M | 3 | RabbitMQ de teste; Q-13 |
 | 7. API FastAPI ✅ aprovada (planos de execução a conferir no Oracle real, Q-17) | Endpoints, perfis, auditoria, OpenAPI, `/metrics` | M | 3 | — |
 | 8. Painel Flask ✅ aprovada (login no Nginx a definir, Q-5) | Páginas, componentes, HTMX, cliente da API | M | 7 | Q-5 |
-| 9. Enricher | Esqueleto com cache, rate limit, `MERGE`; regras por evento após Q-1 | M (esqueleto) / G (regras) | 6 | Q-1, Q-2, assinatura das APIs REST |
+| 9. Enricher ⏳ em revisão (esqueleto; regras após a Q-1) | Esqueleto com cache, rate limit, `MERGE`; regras por evento após Q-1 | M (esqueleto) / G (regras) | 6 | Q-1, Q-2, assinatura das APIs REST |
 | 10. Endurecimento | Teste de carga 10× (Otimizador), `/entender` geral, systemd, Nginx, expurgo, RUNBOOK, README; consumer gravando `subscription_id`, `last_message_at`, reconexões, `token_expires_at` e ping/pong em `OHIP_CONSUMER_STATUS` (pendência do status da API, ADR-0017) | G | 5–9 | Q-6, Q-7, Q-8 |
 
 ## Caminho crítico

@@ -11,13 +11,20 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
+from ohip_streaming.application.errors import (
+    EnrichmentFailedError,
+    ResourceUnavailableError,
+    StoreUnavailableError,
+)
 from ohip_streaming.application.ports import (
+    DlqStage,
     EnrichmentStore,
     MetricsSink,
     NormalizationRule,
     ProcessingStatus,
     QueueDedup,
     ResourceFetcher,
+    StoredEvent,
 )
 from ohip_streaming.domain.identifiers import normalize_event_name
 from ohip_streaming.logging import get_logger
@@ -71,28 +78,45 @@ class EnrichEvent:
         self._metrics = metrics
 
     async def execute(self, message: InboundMessage) -> EnrichOutcome:
-        if not message.is_reprocess and await self._dedup.is_processed(message.message_id):
+        if not message.is_reprocess and await self._is_processed(message.message_id):
             return EnrichOutcome.DUPLICATE
 
         raw_event_id = message.body.get("raw_event_id")
         if isinstance(raw_event_id, bool) or not isinstance(raw_event_id, int):
             log.error("mensagem_sem_raw_event_id", message_id=message.message_id)
             return EnrichOutcome.NOT_FOUND
-        stored = await self._store.get_event(raw_event_id)
-        if stored is None:
-            log.error("evento_bruto_nao_encontrado", raw_event_id=raw_event_id)
-            return EnrichOutcome.NOT_FOUND
+        rule: NormalizationRule | None = None
+        try:
+            stored = await self._store.get_event(raw_event_id)
+            if stored is None:
+                log.error("evento_bruto_nao_encontrado", raw_event_id=raw_event_id)
+                return EnrichOutcome.NOT_FOUND
+            rule = self._rules.get(stored.event.event_name)
+            return await self._apply(message, stored, rule)
+        except (StoreUnavailableError, ResourceUnavailableError):
+            raise  # infraestrutura: não é falha da mensagem (ADR-0019)
+        except Exception as exc:
+            # Com recurso REST, a falha é do estágio ENRICH; sem, NORMALIZE.
+            stage = (
+                DlqStage.ENRICH if rule is not None and rule.needs_resource else DlqStage.NORMALIZE
+            )
+            raise EnrichmentFailedError(raw_event_id, stage.value, exc) from exc
 
+    async def _apply(
+        self, message: InboundMessage, stored: StoredEvent, rule: NormalizationRule | None
+    ) -> EnrichOutcome:
+        raw_event_id = stored.raw_event_id
         event = stored.event
-        rule = self._rules.get(event.event_name)
         if rule is None:
             await self._store.apply(raw_event_id, (), ProcessingStatus.UNMAPPED)
             self._metrics.increment("ohip_events_unmapped_total", event_name=event.event_name)
-            await self._dedup.mark_processed(message.message_id)
+            await self._mark_processed(message.message_id)
             return EnrichOutcome.UNMAPPED
 
         resource = (
-            await self._fetcher.fetch(event.module_name, event.hotel_id, event.primary_key)
+            await self._fetcher.fetch(
+                event.chain_code, event.module_name, event.hotel_id, event.primary_key
+            )
             if rule.needs_resource
             else None
         )
@@ -104,5 +128,24 @@ class EnrichEvent:
             self._metrics.increment(
                 "ohip_merge_skipped_total", skipped, event_name=event.event_name
             )
-        await self._dedup.mark_processed(message.message_id)  # só depois do sucesso
+        await self._mark_processed(message.message_id)  # só depois do sucesso
         return outcome
+
+    # Redis é atalho (ADR-0009): falha da deduplicação nunca vira falha da mensagem. Sem ela,
+    # a mensagem é processada de novo, e o MERGE condicional torna isso seguro.
+
+    async def _is_processed(self, message_id: str) -> bool:
+        try:
+            return await self._dedup.is_processed(message_id)
+        except Exception:
+            log.warning("enricher_dedup_indisponivel", exc_info=True)
+            return False
+
+    async def mark_processed(self, message_id: str) -> None:
+        await self._mark_processed(message_id)
+
+    async def _mark_processed(self, message_id: str) -> None:
+        try:
+            await self._dedup.mark_processed(message_id)
+        except Exception:
+            log.warning("enricher_dedup_indisponivel", exc_info=True)

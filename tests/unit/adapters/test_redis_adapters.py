@@ -163,3 +163,23 @@ async def test_open_redis_uses_short_timeouts() -> None:
     assert kwargs["socket_timeout"] == 2.0
     assert kwargs["password"] == "senha"
     await client.aclose()
+
+
+async def test_resource_cache() -> None:
+    from ohip_streaming.adapters.redis.caches import RedisResourceCache
+
+    redis = FakeRedis()
+    cache = RedisResourceCache(redis, ttl_s=45)
+    assert await cache.get("ohip:rest:k") == (False, None)
+    await cache.put("ohip:rest:k", {"a": "ç"})
+    await cache.put("ohip:rest:vazio", None)
+    assert await cache.get("ohip:rest:k") == (True, {"a": "ç"})
+    assert await cache.get("ohip:rest:vazio") == (True, None)  # "não encontrado" em cache
+    assert redis.ttls["ohip:rest:k"] == 45
+    redis.data["ohip:rest:lixo"] = b"{nao"
+    redis.data["ohip:rest:lista"] = b"[1]"
+    assert await cache.get("ohip:rest:lixo") == (False, None)
+    assert await cache.get("ohip:rest:lista") == (False, None)
+    redis.broken = True
+    assert await cache.get("ohip:rest:k") == (False, None)  # Redis fora = sem cache
+    await cache.put("ohip:rest:k", {})

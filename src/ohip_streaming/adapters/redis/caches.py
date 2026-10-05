@@ -1,17 +1,21 @@
 """Caches no Redis: dedup rápido do consumer, dedup do enricher e token OAuth.
 
 Chaves (ARCHITECTURE §7): ``ohip:seen:<uniqueEventId>`` (24 h, gravada só depois do commit),
-``ohip:processed:<message_id>`` (enricher) e ``ohip:token:<ambiente>:<chain>``.
+``ohip:processed:<message_id>`` (enricher), ``ohip:token:<ambiente>:<chain>`` e
+``ohip:rest:<chain>:<modulo>:<hotel>:<primaryKey>`` (recursos REST do enricher).
 """
 
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import Any, Protocol
 
 from ohip_streaming.application.ports import AccessToken
+from ohip_streaming.logging import get_logger
+
+log = get_logger(__name__)
 
 SEEN_PREFIX = "ohip:seen:"
 PROCESSED_PREFIX = "ohip:processed:"
@@ -106,3 +110,35 @@ class RedisTokenCache:
 
     async def delete(self, key: str) -> None:
         await self._redis.delete(key)
+
+
+class RedisResourceCache:
+    """Cache dos recursos REST do OHIP (``ohip:rest:*``, ADR-0019): coalesce rajadas de eventos
+    do mesmo recurso. Guarda também o "não encontrado" (``null``). Falha do Redis = sem cache."""
+
+    def __init__(self, redis: RedisLike, *, ttl_s: int) -> None:
+        self._redis = redis
+        self._ttl_s = ttl_s
+
+    async def get(self, key: str) -> tuple[bool, Mapping[str, Any] | None]:
+        try:
+            raw = await self._redis.get(key)
+        except Exception:
+            log.warning("cache_rest_indisponivel", exc_info=True)
+            return False, None
+        if raw is None:
+            return False, None
+        try:
+            value = json.loads(raw)
+        except ValueError:
+            return False, None
+        if value is not None and not isinstance(value, dict):
+            return False, None
+        return True, value
+
+    async def put(self, key: str, value: Mapping[str, Any] | None) -> None:
+        try:
+            payload = json.dumps(value, separators=(",", ":"), ensure_ascii=False)
+            await self._redis.set(key, payload.encode(), ex=self._ttl_s)
+        except Exception:
+            log.warning("cache_rest_indisponivel", exc_info=True)

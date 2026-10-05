@@ -112,6 +112,54 @@ class MessageTooLargeError(ConnectionClosedError):
     code = "WS_MESSAGE_TOO_LARGE"
 
 
+class ResourceUnavailableError(ApplicationError):
+    """REST do OHIP fora, lenta, 5xx, 429 ou 401 repetido: falha de infraestrutura, não da
+    mensagem. Não conta tentativa (ADR-0019). ``retry_after_s``: pausa pedida pelo servidor."""
+
+    code = "RESOURCE_UNAVAILABLE"
+
+    def __init__(self, message: str, *, retry_after_s: float | None = None) -> None:
+        super().__init__(message)
+        self.retry_after_s = retry_after_s
+
+
+class ResourceRejectedError(ApplicationError):
+    """A REST recusou o pedido deste evento (4xx), ou o evento não tem o necessário para a
+    chamada (ex.: sem hotelId). Falha da mensagem: conta tentativa (ADR-0019)."""
+
+    code = "RESOURCE_REJECTED"
+
+
+class RuleError(ApplicationError):
+    """Uma regra de normalização recusou o evento (RF-08). O texto vai para o log e para a DLQ
+    (API e painel): **nunca** coloque nele valores do evento, só nomes de campos e motivos."""
+
+    code = "RULE_ERROR"
+
+
+OMITTED_DETAIL = "detalhe omitido (pode conter dados pessoais)"
+
+
+class EnrichmentFailedError(ApplicationError):
+    """Falha de uma mensagem no enricher, já classificada pelo estágio da DLQ.
+
+    ``detail`` é o que pode ir para log e DLQ: o texto dos nossos erros (``ApplicationError``,
+    escritos sem dados pessoais) ou, para qualquer outra exceção (ex.: ``KeyError`` de uma
+    regra com o valor do campo), só o aviso de omissão."""
+
+    code = "ENRICHMENT_FAILED"
+
+    def __init__(self, raw_event_id: int, stage: str, cause: BaseException) -> None:
+        detail = (
+            (str(cause) or cause.code) if isinstance(cause, ApplicationError) else OMITTED_DETAIL
+        )
+        super().__init__(f"{type(cause).__name__}: {detail}")
+        self.raw_event_id = raw_event_id
+        self.stage = stage
+        self.cause = cause
+        self.detail = detail
+
+
 class HandshakeRejectedError(ApplicationError):
     """O gateway recusou o upgrade (ex.: HTTP 400 por chave ou URL errada): configuração."""
 

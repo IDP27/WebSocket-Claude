@@ -24,6 +24,7 @@ ohip-consumer = "ohip_streaming.entrypoints.consumer:main"
 ohip-publisher = "ohip_streaming.entrypoints.publisher:main"
 ohip-api = "ohip_streaming.entrypoints.api.server:main"
 ohip-admin = "ohip_streaming.entrypoints.admin.server:main"
+ohip-enricher = "ohip_streaming.entrypoints.enricher:main"
 
 [tool.poetry]
 packages = [{ include = "ohip_streaming", from = "src" }]

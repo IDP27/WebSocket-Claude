@@ -639,28 +639,42 @@ class EnrichmentStore(Protocol):
         escritas foram ignoradas pela condição."""
         ...
 
-    async def add_dlq(self, raw_event_id: int, stage: DlqStage, error: str) -> None: ...
+    async def add_dlq(
+        self, raw_event_id: int, stage: DlqStage, error_class: str, error: str
+    ) -> None:
+        """Numa transação: item de DLQ (``NORMALIZE``/``ENRICH``) com chain, uid e offset do
+        bruto, e ``processing_status = FAILED`` no bruto (ADR-0019)."""
+        ...
 
 
 class ResourceFetcher(Protocol):
     async def fetch(
-        self, module_name: str, hotel_id: str | None, primary_key: str
+        self, chain_code: str, module_name: str, hotel_id: str | None, primary_key: str
     ) -> Mapping[str, Any] | None:
-        """GET do recurso completo na REST do OHIP (com cache e rate limit)."""
+        """GET do recurso completo na REST do OHIP (com cache e rate limit). ``None`` se o
+        recurso não existe mais. Levanta ``ResourceUnavailableError`` (transitória) ou
+        ``ResourceRejectedError`` (falha da mensagem)."""
         ...
 
 
 @dataclass(frozen=True, slots=True)
 class DomainWrite:
+    """Escrita numa tabela de domínio. A tabela precisa de ``UNIQUE`` nas colunas de ``key``
+    (com N enrichers em paralelo, é o que impede duas linhas da mesma entidade, ADR-0019 §4).
+    Nenhum valor de ``key`` pode ser ``None``: hotel ausente vira ``'#CHAIN'``."""
+
     table: str
-    key: Mapping[str, Any]  # chave natural: chain_code, NVL(hotel_id,'#CHAIN'), primary_key
+    key: Mapping[str, Any]  # chave natural: chain_code, hotel_id (ou '#CHAIN'), primary_key
     values: Mapping[str, Any]
     source_event_raw_id: int
     source_offset_num: int
 
 
 class NormalizationRule(Protocol):
-    """Regra de um ou mais ``eventName`` (RF-08). As regras reais vêm após a Q-1 (Fase 9)."""
+    """Regra de um ou mais ``eventName`` (RF-08). As regras reais vêm após a Q-1 (Fase 9).
+
+    Para recusar um evento, ``build`` levanta ``RuleError`` com texto sem dados pessoais (vai
+    para log e DLQ). De qualquer outra exceção só o nome da classe é registrado (ADR-0019)."""
 
     @property
     def event_names(self) -> frozenset[str]: ...

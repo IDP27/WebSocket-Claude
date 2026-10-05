@@ -159,6 +159,7 @@ SELECT id, exchange_name, routing_key, message, attempts, next_attempt_at
 3. Aplica a regra do `eventName` (RF-08). Sem regra → `processing_status = UNMAPPED` + métrica.
 4. Se a regra pedir, chama a REST do OHIP com `primaryKey` + `hotelId`, usando cache e respeitando HTTP 429 (RF-09).
 5. Grava com **`MERGE` condicional**: cada tabela de domínio guarda `source_offset_num NUMBER(20)` (o offset do evento, que é uma string só de dígitos, convertido para número). O `UPDATE` só acontece se o evento recebido **não for mais antigo** (`WHEN MATCHED THEN UPDATE ... WHERE t.source_offset_num <= :offset_num`). Assim, N enrichers em paralelo não sobrescrevem estado novo com antigo, e reprocessar o mesmo evento reaplica a regra (idempotente). Usa o offset, e não o `id` do bruto, porque um evento antigo regravado por retry de DLQ ganha `id` novo (ADR-0006). Atualização ignorada pela condição gera a métrica `ohip_merge_skipped_total`; muitas seguidas (ex.: OHIP reiniciou os offsets, D-6) disparam alerta e seguem o procedimento do RUNBOOK.
+   - **Toda tabela de domínio tem `UNIQUE` na chave natural** (as colunas do `ON`). Com N enrichers, dois `MERGE` simultâneos da mesma entidade nova podem ambos cair no `WHEN NOT MATCHED`: o `UNIQUE` faz o segundo falhar com ORA-00001 (nova tentativa, que vira `UPDATE`) em vez de criar duas linhas em silêncio. Nenhuma coluna da chave aceita `NULL` (`t.col = NULL` nunca casa e cada evento inseriria uma linha): a regra grava `'#CHAIN'` no lugar do hotel ausente, e o adapter recusa chave nula.
 6. Atualiza `processing_status` (`NORMALIZED`/`ENRICHED`/`FAILED`); falha após N tentativas → DLQ `NORMALIZE`/`ENRICH`.
 
 ### 4.4 Reprocessamento
@@ -200,7 +201,7 @@ DDL em [`sql/`](../sql/) (rascunho, **não executar**). Identificadores ≤ 30 c
 | `OHIP_DLQ` | Falhas por estágio | `stage IN (CONSUME, PUBLISH, NORMALIZE, ENRICH)`; `raw_message CLOB` |
 | `OHIP_CONSUMER_STATUS` | Estado da conexão | último ping/pong/mensagem, `last_disconnect_at`, fechamentos consecutivos, próxima tentativa |
 | `OHIP_REPLAY_REQUEST` | Pedidos de replay auditáveis | no máximo 1 `PENDING` por chain (índice único por função) |
-| Tabelas de domínio | Normalizadas | **Só após a Q-1**; sempre com `source_event_raw_id` e `source_offset_num`. Chave natural `(chain_code, NVL(hotel_id, '#CHAIN'), primary_key)`, porque perfis podem vir com `hotel_id` nulo e um `NULL` não casa no `ON` do `MERGE` |
+| Tabelas de domínio | Normalizadas | **Só após a Q-1**; sempre com `source_event_raw_id` e `source_offset_num`. Chave natural `(chain_code, hotel_id, primary_key)` com **`UNIQUE`** e colunas `NOT NULL`: perfis podem vir sem hotel, e a regra grava `'#CHAIN'` (um `NULL` não casa no `ON` do `MERGE`, §4.3) |
 
 ### 5.1 Retenção e expurgo
 
@@ -261,7 +262,7 @@ Propriedades AMQP: `message_id=<uniqueEventId>`, `content_type=application/json`
 | Token OAuth | `ohip:token:<ambiente>:<chain>` | `exp − margem` | Por chain (DV-2). Sem Redis: cada processo busca o seu token |
 | Dedup rápido | `ohip:seen:<uniqueEventId>` | 24 h | gravado **após** o commit |
 | Dedup do enricher | `ohip:processed:<message_id>` | configurável | marcado só depois do sucesso |
-| Recurso REST | `ohip:rest:<modulo>:<hotel>:<primaryKey>` | 30–60 s | coalesce rajadas |
+| Recurso REST | `ohip:rest:<chain>:<modulo>:<hotel>:<primaryKey>` | `ENRICHER_REST_CACHE_TTL_S` (45 s) | coalesce rajadas; guarda também o "não encontrado" (ADR-0019) |
 | LOV | `ohip:lov:<hotel>:<tipo>` | 24 h | |
 | Status da API | `ohip:api:status` | 5 s | protege o Oracle do polling do painel (mais cópia local e um cálculo por worker de cada vez) |
 | Métricas dos processos | `ohip:metrics:<processo>:<instancia>` + conjunto `ohip:metrics_index` | 60 s | snapshot dos contadores a cada 15 s (§10); a API lê pelo índice, sem `SCAN` |
@@ -297,6 +298,7 @@ entrypoints ──▶ application ──▶ domain
 - Fase 6 (ADR-0016): `adapters/rabbitmq/publisher.py` (confirms e topologia), `application/use_cases/publisher_service.py` (laço com lease), `entrypoints/publisher.py` (processo `ohip-publisher`) e `entrypoints/common.py`.
 - Fase 7 (ADR-0017): `application/use_cases/monitoring.py` (consultas com máscara) e o port `MonitoringStore`, `adapters/oracle/monitoring_store.py` (paginação por chave com `ROWNUM`), `InlineSession` em `adapters/oracle/database.py`, `adapters/redis/api_cache.py` (Redis síncrono da API), `adapters/rabbitmq/probe.py` (`/ready`) e `entrypoints/api/` (rotas `def`, autenticação, erros, `/metrics`, processo `ohip-api`).
 - Fase 8 (ADR-0018): `entrypoints/admin/` — `settings.py` (configuração própria `ADMIN_*`), `api_client.py` (cliente síncrono da API, token por perfil e `X-Actor`), `app.py` (blueprint `/admin`, identidade pelos headers do Nginx, CSRF, fragmentos HTMX), `templates/`, `static/` e `server.py` (processo `ohip-admin`, Gunicorn).
+- Fase 9 (ADR-0019, **sem regras até a Q-1**): `application/use_cases/enricher_service.py` (tentativas, DLQ e falhas de infraestrutura), `adapters/oracle/enrichment_store.py` (`MERGE` condicional e DLQ `NORMALIZE`/`ENRICH`), `adapters/ohip_rest/resources.py` (REST do OHIP com rate limit, cache e `Retry-After`), `adapters/rabbitmq/consumer.py` (fila `ohip.enricher`) e `entrypoints/enricher.py` (processo `ohip-enricher`).
 - `entrypoints/`: `consumer.py`, `publisher.py`, `enricher.py`, `api/`, `admin/`.
 
 `import-linter` (ADR-0005): `domain`/`application` sem `oracledb`, `websockets`, `fastapi`, `flask`, `aio_pika`, `redis`, `httpx`; `entrypoints.admin` sem `adapters.oracle`, `adapters.redis`, `oracledb`, `redis`.

@@ -16,6 +16,7 @@ from typing import Any
 from ohip_streaming.application.errors import (
     LeaseLostError,
     LeaseNotProvisionedError,
+    NotFoundError,
     ReplayAlreadyPendingError,
     UnknownChainError,
 )
@@ -125,12 +126,15 @@ class FakeQueueDedup:
 class FakeFetcher:
     def __init__(self, resource: Mapping[str, Any] | None = None) -> None:
         self.resource = resource
-        self.calls: list[tuple[str, str | None, str]] = []
+        self.calls: list[tuple[str, str, str | None, str]] = []
+        self.errors: list[Exception] = []  # levantadas em ordem, uma por chamada
 
     async def fetch(
-        self, module_name: str, hotel_id: str | None, primary_key: str
+        self, chain_code: str, module_name: str, hotel_id: str | None, primary_key: str
     ) -> Mapping[str, Any] | None:
-        self.calls.append((module_name, hotel_id, primary_key))
+        self.calls.append((chain_code, module_name, hotel_id, primary_key))
+        if self.errors:
+            raise self.errors.pop(0)
         return self.resource
 
 
@@ -229,6 +233,7 @@ class InMemoryDatabase:
     fail_persist_when: Callable[[BatchToPersist], Exception | None] | None = None
     row_errors: dict[str, tuple[str, str]] = field(default_factory=dict)  # uid → (classe, msg)
     fail_apply: list[Exception] = field(default_factory=list)
+    fail_add_dlq: list[Exception] = field(default_factory=list)
     persisted_batches: list[BatchToPersist] = field(default_factory=list)
     # Uma sequence por tabela, como na DDL (sql/001_sequences.sql).
     _sequences: Counter[str] = field(default_factory=Counter)
@@ -635,16 +640,26 @@ class InMemoryDatabase:
         self.raw[raw_event_id].status = status
         return skipped
 
-    async def add_dlq(self, raw_event_id: int, stage: DlqStage, error: str) -> None:
+    async def add_dlq(
+        self, raw_event_id: int, stage: DlqStage, error_class: str, error: str
+    ) -> None:
+        if self.fail_add_dlq:
+            raise self.fail_add_dlq.pop(0)
+        row = self.raw.get(raw_event_id)
+        if row is None:
+            raise NotFoundError(f"evento bruto {raw_event_id} não encontrado")
         item_id = self._next_id("dlq")
         self.dlq[item_id] = DlqRecord(
             id=item_id,
             stage=stage,
-            chain_code=None,
-            error=error,
+            chain_code=row.event.chain_code,
+            error=f"{error_class}: {error}",
             event_raw_id=raw_event_id,
+            unique_event_id=row.event.unique_event_id,
+            offset=row.event.offset.value,
             created_at=self.clock.now(),
         )
+        row.status = ProcessingStatus.FAILED  # mesma transação (ADR-0019)
 
 
 # =============================================================== token

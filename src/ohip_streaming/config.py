@@ -269,6 +269,78 @@ class PublisherSettings(BaseSettings):
     broker_backoff_max_s: float = Field(default=60.0, gt=0)
 
 
+_ROUTING_KEY_RE = re.compile(r"^[A-Za-z0-9_*#-]+(\.[A-Za-z0-9_*#-]+)*$")
+_PATH_FIELDS_RE = re.compile(r"\{([^}]*)\}")
+
+
+class EnricherSettings(BaseSettings):
+    """Enricher (ARCHITECTURE §4.3, ADR-0019). Sem regras até a Q-1; REST desligada (Q-2)."""
+
+    model_config = _config("ENRICHER_")
+
+    prefetch: int = Field(default=5, ge=1, le=1000)
+    max_attempts: int = Field(default=3, ge=1)  # falhas da mensagem antes da DLQ
+    retry_delay_s: float = Field(default=2.0, ge=0)
+    transient_backoff_initial_s: float = Field(default=5.0, gt=0)
+    transient_backoff_max_s: float = Field(default=60.0, gt=0)
+    # Disjuntor: mensagens seguidas com a mesma falha = falha do sistema, não vão para a DLQ.
+    systemic_failure_threshold: int = Field(default=5, ge=2)
+    # Routing keys ligadas à fila ohip.enricher em ohip.events (vazio até a Q-1).
+    bindings: Annotated[list[str], NoDecode] = Field(default_factory=list)
+    dedup_ttl_s: int = Field(default=7 * 86_400, ge=60)  # ohip:processed:<message_id>
+    # REST do OHIP (RF-09)
+    rest_enabled: bool = False
+    rest_timeout_s: float = Field(default=10.0, gt=0)
+    rest_rate_per_s: float = Field(default=5.0, gt=0)
+    rest_burst: int = Field(default=5, ge=1)
+    rest_cache_ttl_s: int = Field(default=45, ge=1)
+    rest_auth_rejected_alert: int = Field(default=5, ge=1)  # recusas seguidas do OAuth
+    # moduleName (sem diferenciar maiúsculas) → caminho com {hotelId} e {primaryKey}
+    # (docs/OHIP_APIS.md §4: getReservation e getProfile).
+    resource_paths: dict[str, str] = Field(
+        default_factory=lambda: {
+            "reservation": "/rsv/v1/hotels/{hotelId}/reservations/{primaryKey}",
+            "profile": "/crm/v1/profiles/{primaryKey}",
+        }
+    )
+
+    @field_validator("bindings", mode="before")
+    @classmethod
+    def _parse_bindings(cls, value: object) -> object:
+        return _split_csv(value)
+
+    @field_validator("bindings")
+    @classmethod
+    def _validate_bindings(cls, value: list[str]) -> list[str]:
+        for key in value:
+            if not _ROUTING_KEY_RE.fullmatch(key):
+                raise ValueError(f"routing key inválida em ENRICHER_BINDINGS: {key!r}")
+        return value
+
+    @field_validator("resource_paths")
+    @classmethod
+    def _validate_paths(cls, value: dict[str, str]) -> dict[str, str]:
+        paths: dict[str, str] = {}
+        for module, path in value.items():
+            fields = set(_PATH_FIELDS_RE.findall(path))
+            if not path.startswith("/") or "primaryKey" not in fields:
+                raise ValueError(
+                    f"ENRICHER_RESOURCE_PATHS[{module}] deve começar com / e ter {{primaryKey}}"
+                )
+            if fields - {"hotelId", "primaryKey"}:
+                raise ValueError(
+                    f"ENRICHER_RESOURCE_PATHS[{module}]: só {{hotelId}} e {{primaryKey}}"
+                )
+            paths[module.strip().lower()] = path
+        return paths
+
+    @model_validator(mode="after")
+    def _validate_backoff(self) -> Self:
+        if self.transient_backoff_max_s < self.transient_backoff_initial_s:
+            raise ValueError("transient_backoff_max_s deve ser >= transient_backoff_initial_s")
+        return self
+
+
 class RedisSettings(BaseSettings):
     """Redis: token, caches e métricas — nunca travas (ADR-0008)."""
 

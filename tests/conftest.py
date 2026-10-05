@@ -23,6 +23,7 @@ _PREFIXES = (
     "LEASE_",
     "PUBLISHER_",
     "ADMIN_",
+    "ENRICHER_",
 )
 
 
