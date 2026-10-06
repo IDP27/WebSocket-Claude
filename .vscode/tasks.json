@@ -29,6 +29,13 @@
       "problemMatcher": []
     },
     {
+      "label": "make test-load (carga do consumer, RNF-13)",
+      "detail": "Servidor OHIP simulado + Oracle simulado; ~2 min. LOAD_* ajustam (tests/load/).",
+      "type": "shell",
+      "command": "make test-load",
+      "problemMatcher": []
+    },
+    {
       "label": "Specs da Oracle: conferir integridade",
       "type": "shell",
       "command": "make oracle-docs",

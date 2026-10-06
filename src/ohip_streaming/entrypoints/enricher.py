@@ -42,7 +42,7 @@ from ohip_streaming.adapters.redis.metrics import (
 )
 from ohip_streaming.adapters.system import SystemClock
 from ohip_streaming.application.errors import BrokerMisconfiguredError, ResourceRejectedError
-from ohip_streaming.application.ports import ResourceFetcher
+from ohip_streaming.application.ports import DlqStage, ResourceFetcher
 from ohip_streaming.application.use_cases.enrich_event import EnrichEvent, RuleRegistry
 from ohip_streaming.application.use_cases.enricher_service import (
     EnricherOptions,
@@ -59,7 +59,7 @@ from ohip_streaming.config import (
     RedisSettings,
     load_settings,
 )
-from ohip_streaming.entrypoints.common import instance_id
+from ohip_streaming.entrypoints.common import AlertCounter, instance_id, preregister
 from ohip_streaming.logging import configure_logging, get_logger
 
 log = get_logger(__name__)
@@ -138,6 +138,7 @@ async def compose(config: EnricherConfig) -> AsyncIterator[EnricherRuntime]:
     instance = instance_id()
     clock = SystemClock()
     metrics = InMemoryMetrics()
+    preregister(metrics, alert_counters())
     pool = open_pool(config.oracle)
     executor = ThreadPoolExecutor(config.oracle.pool_max, thread_name_prefix="oracle-enricher")
     session = PooledSession(pool, call_timeout_ms=config.oracle.call_timeout_ms, executor=executor)
@@ -194,12 +195,23 @@ async def compose(config: EnricherConfig) -> AsyncIterator[EnricherRuntime]:
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await task
+            await snapshots.publish()  # último retrato antes de sair
     finally:
         if http is not None:
             await http.aclose()
         await redis.aclose()
         pool.close(force=True)
         executor.shutdown(wait=False)
+
+
+def alert_counters() -> list[AlertCounter]:
+    """Contadores do enricher citados em deploy/prometheus/ohip-alerts.yml."""
+    return [
+        ("ohip_enricher_systemic_failures_total", {"stage": DlqStage.NORMALIZE.value}),
+        ("ohip_enricher_systemic_failures_total", {"stage": DlqStage.ENRICH.value}),
+        ("ohip_enricher_unexpected_errors_total", {}),
+        ("ohip_rest_auth_rejected_total", {}),
+    ]
 
 
 async def _publish_metrics(publisher: RedisMetricsPublisher) -> None:

@@ -1,0 +1,13 @@
+# Expurgo diário, fora do horário de pico. Persistent: roda ao ligar se perdeu a janela.
+[Unit]
+Description=OHIP Streaming - expurgo diário
+PartOf=ohip-streaming.target
+
+[Timer]
+OnCalendar=*-*-* 03:30:00
+RandomizedDelaySec=15min
+Persistent=true
+Unit=ohip-purge.service
+
+[Install]
+WantedBy=timers.target ohip-streaming.target

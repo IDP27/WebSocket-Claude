@@ -1,0 +1,118 @@
+# Regras de alerta do OHIP Streaming (RF-11, ADR-0020 §6) sobre o /metrics da API.
+# Padrão da Q-7 (ferramenta de alertas ainda não definida): Prometheus + Alertmanager.
+# Com outra ferramenta, use as mesmas expressões como referência.
+# Limites marcados "AJUSTAR" dependem da Q-7/Q-8 (horário comercial em UTC: 08h-20h BRT).
+# Contadores vêm de snapshots por processo (rótulos process/instance). Os usados aqui são
+# registrados com 0 na partida (entrypoints: alert_counters). Eventos raros usam também
+# "X > 0 unless X offset W": pega a série que já nasce com 1 (o increase() não vê esse salto).
+groups:
+  - name: ohip-conexao
+    rules:
+      - alert: OhipConsumerParado
+        expr: ohip_consumer_state{state="STOPPED"} == 1
+        labels: {severity: critical}
+        annotations:
+          summary: "Consumer da chain {{ $labels.chain_code }} parado (4403/4406/OAuth/mensagem grande)"
+          runbook: "RUNBOOK: Consumer - STOPPED exige ação humana"
+      - alert: OhipConsumerDesconectado
+        expr: ohip_consumer_state{state="SUBSCRIBED"} == 0 unless on(chain_code) ohip_consumer_state{state="STOPPED"} == 1
+        for: 10m  # AJUSTAR (Y): bem antes da retenção de 7 dias do OHIP
+        labels: {severity: warning}
+        annotations:
+          summary: "Chain {{ $labels.chain_code }} sem assinatura há 10 min"
+      - alert: OhipConsumerDesconectadoLongo
+        expr: ohip_consumer_state{state="SUBSCRIBED"} == 0
+        for: 2h  # AJUSTAR: após 24 h desconectado o offset passa a ser obrigatório
+        labels: {severity: critical}
+        annotations:
+          summary: "Chain {{ $labels.chain_code }} sem assinatura há 2 h"
+      - alert: OhipSemEventos
+        expr: ohip_consumer_last_message_age_seconds > 1800 and on() (hour() >= 11 and hour() < 23)
+        for: 5m  # AJUSTAR (X): depende do volume da Q-8
+        labels: {severity: warning}
+        annotations:
+          summary: "Chain {{ $labels.chain_code }} sem mensagens há 30 min em horário comercial"
+      - alert: OhipFalhasDeConexao
+        expr: ohip_consumer_consecutive_failures >= 3
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: "Chain {{ $labels.chain_code }}: {{ $value }} falhas de conexão seguidas"
+      - alert: OhipLockout4409Repetido
+        expr: increase(ohip_ws_reconnects_total{code="4409"}[30m]) >= 3
+        labels: {severity: warning}
+        annotations:
+          summary: "4409 repetido: outra conexão com a mesma app key ou reconexão rápida demais"
+      - alert: OhipLeasePerdido
+        expr: increase(ohip_lease_lost_total[10m]) > 0 or (ohip_lease_lost_total > 0 unless ohip_lease_lost_total offset 10m)
+        labels: {severity: critical}
+        annotations:
+          summary: "Lease perdido por {{ $labels.process }} (outra instância assumiu ou banco lento)"
+      - alert: OhipConexaoEnvenenada
+        expr: increase(ohip_connection_poisoned_total[15m]) > 0 or (ohip_connection_poisoned_total > 0 unless ohip_connection_poisoned_total offset 15m)
+        labels: {severity: warning}
+        annotations:
+          summary: "Conexão envenenada na chain {{ $labels.chain_code }} (banco fora ou fila travada)"
+
+  - name: ohip-dados
+    rules:
+      - alert: OhipDlqAberta
+        expr: ohip_dlq_open > 0  # AJUSTAR (Z)
+        for: 15m
+        labels: {severity: warning}
+        annotations:
+          summary: "{{ $value }} itens abertos na DLQ {{ $labels.stage }} da chain {{ $labels.chain_code }}"
+      - alert: OhipOutboxParada
+        expr: ohip_outbox_oldest_pending_seconds > 300  # AJUSTAR (W)
+        for: 5m
+        labels: {severity: critical}
+        annotations:
+          summary: "Outbox da chain {{ $labels.chain_code }} parada há {{ $value }} s"
+      - alert: OhipOutboxFalhas
+        expr: ohip_outbox_failed > 0
+        labels: {severity: warning}
+        annotations:
+          summary: "{{ $value }} mensagens FAILED na outbox da chain {{ $labels.chain_code }}"
+      - alert: OhipDadoDeCartao
+        expr: increase(ohip_card_data_detected_total[1h]) > 0 or (ohip_card_data_detected_total > 0 unless ohip_card_data_detected_total offset 1h)
+        labels: {severity: critical}
+        annotations:
+          summary: "Número de cartão removido de um evento (LGPD/PCI): revisar a assinatura de eventos"
+      - alert: OhipMergeIgnoradoEmMassa
+        expr: increase(ohip_merge_skipped_total[15m]) > 100  # AJUSTAR
+        labels: {severity: warning}
+        annotations:
+          summary: "Muitos MERGE ignorados: offsets reiniciados no OHIP? (D-6, RUNBOOK)"
+
+  - name: ohip-enricher
+    rules:
+      - alert: OhipEnricherFalhaSistemica
+        expr: increase(ohip_enricher_systemic_failures_total[10m]) > 0 or (ohip_enricher_systemic_failures_total > 0 unless ohip_enricher_systemic_failures_total offset 10m)
+        labels: {severity: critical}
+        annotations:
+          summary: "Disjuntor do enricher aberto ({{ $labels.stage }}): falha do sistema, não das mensagens"
+      - alert: OhipEnricherErroInesperado
+        expr: increase(ohip_enricher_unexpected_errors_total[10m]) > 0 or (ohip_enricher_unexpected_errors_total > 0 unless ohip_enricher_unexpected_errors_total offset 10m)
+        labels: {severity: critical}
+        annotations:
+          summary: "Erro inesperado no enricher (bug): mensagens voltando para a fila"
+      - alert: OhipRestCredencialRecusada
+        expr: increase(ohip_rest_auth_rejected_total[15m]) >= 5
+        labels: {severity: critical}
+        annotations:
+          summary: "OAuth recusando as credenciais do enricher (credencial ou assinatura no Developer Portal)"
+
+  - name: ohip-plataforma
+    rules:
+      - alert: OhipApiFora
+        expr: up{job="ohip-api"} == 0  # AJUSTAR: nome do job no prometheus.yml
+        for: 2m
+        labels: {severity: critical}
+        annotations:
+          summary: "API de controle fora: sem métricas nem painel"
+      - alert: OhipFonteDeMetricasFora
+        expr: ohip_metrics_source_up == 0
+        for: 5m
+        labels: {severity: critical}
+        annotations:
+          summary: "{{ $labels.source }} inacessível pela API (Oracle fora ou Redis fora)"

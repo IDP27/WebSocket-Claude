@@ -205,13 +205,14 @@ DDL em [`sql/`](../sql/) (rascunho, **não executar**). Identificadores ≤ 30 c
 
 ### 5.1 Retenção e expurgo
 
-Job diário, em lotes (`DELETE ... WHERE ROWNUM <= :n`, commit por lote), nesta ordem:
+Processo `ohip-purge` (timer diário do systemd, usuário Oracle `ohip_purge`; ADR-0020 §2), em lotes (`DELETE ... WHERE ROWNUM <= :n`, commit por lote, pausa entre lotes e prazo total), nesta ordem:
 
 1. `OHIP_DLQ` resolvida há mais de 90 dias.
-2. `OHIP_OUTBOX` `SENT` há mais de 90 dias.
-3. `OHIP_EVENT_RAW` com mais de 90 dias **e** `NOT EXISTS` em outbox e DLQ (linhas `FAILED` e DLQ abertas seguram o bruto até serem resolvidas).
+2. `OHIP_OUTBOX` `SENT` há mais de 90 dias, sem item de DLQ apontando para ela.
+3. `OHIP_OUTBOX` `FAILED` criada há mais de 90 dias e já sem item de DLQ (o item `PUBLISH` foi resolvido e expurgado no passo 1; o retry cria linha nova e a antiga ficaria `FAILED` para sempre).
+4. `OHIP_EVENT_RAW` com mais de 90 dias **e** `NOT EXISTS` em outbox e DLQ (linhas `PENDING`, `FAILED` com DLQ aberta e DLQ aberta seguram o bruto até serem resolvidas).
 
-Sem particionamento (licença adicional no 11g). Prazos finais dependem da Q-9.
+Corte pelo relógio do banco. Padrão `PURGE_DRY_RUN=true` (só conta). Tabelas de domínio não têm chave estrangeira para o bruto. Sem particionamento (licença adicional no 11g). Prazos finais dependem da Q-9.
 
 ### 5.2 Volume e desempenho
 
@@ -299,7 +300,8 @@ entrypoints ──▶ application ──▶ domain
 - Fase 7 (ADR-0017): `application/use_cases/monitoring.py` (consultas com máscara) e o port `MonitoringStore`, `adapters/oracle/monitoring_store.py` (paginação por chave com `ROWNUM`), `InlineSession` em `adapters/oracle/database.py`, `adapters/redis/api_cache.py` (Redis síncrono da API), `adapters/rabbitmq/probe.py` (`/ready`) e `entrypoints/api/` (rotas `def`, autenticação, erros, `/metrics`, processo `ohip-api`).
 - Fase 8 (ADR-0018): `entrypoints/admin/` — `settings.py` (configuração própria `ADMIN_*`), `api_client.py` (cliente síncrono da API, token por perfil e `X-Actor`), `app.py` (blueprint `/admin`, identidade pelos headers do Nginx, CSRF, fragmentos HTMX), `templates/`, `static/` e `server.py` (processo `ohip-admin`, Gunicorn).
 - Fase 9 (ADR-0019, **sem regras até a Q-1**): `application/use_cases/enricher_service.py` (tentativas, DLQ e falhas de infraestrutura), `adapters/oracle/enrichment_store.py` (`MERGE` condicional e DLQ `NORMALIZE`/`ENRICH`), `adapters/ohip_rest/resources.py` (REST do OHIP com rate limit, cache e `Retry-After`), `adapters/rabbitmq/consumer.py` (fila `ohip.enricher`) e `entrypoints/enricher.py` (processo `ohip-enricher`).
-- `entrypoints/`: `consumer.py`, `publisher.py`, `enricher.py`, `api/`, `admin/`.
+- Fase 10 (ADR-0020): status completo do consumer em `OHIP_CONSUMER_STATUS` (`record_subscribed`, `record_health`, `record_disconnect` com falhas, reconexões e próxima tentativa), expurgo (`application/use_cases/purge.py`, `adapters/oracle/purge_store.py`, `entrypoints/purge.py`), teste de carga (`tests/load/`) e deploy (`deploy/systemd/`, `deploy/nginx/`, `deploy/prometheus/`).
+- `entrypoints/`: `consumer.py`, `publisher.py`, `enricher.py`, `purge.py`, `api/`, `admin/`.
 
 `import-linter` (ADR-0005): `domain`/`application` sem `oracledb`, `websockets`, `fastapi`, `flask`, `aio_pika`, `redis`, `httpx`; `entrypoints.admin` sem `adapters.oracle`, `adapters.redis`, `oracledb`, `redis`.
 
@@ -308,7 +310,7 @@ entrypoints ──▶ application ──▶ domain
 - Logs JSON (`structlog`) com `chain_code`, `hotel_id`, `offset`, `unique_event_id`, `subscription_id`, `code_version`. Nunca token, secret, app key ou `detail` sem máscara.
 - **Métricas**: cada processo mantém contadores em memória e grava um snapshot a cada 15 s em `ohip:metrics:<processo>:<instancia>` (Redis, TTL 60 s). O consumer também grava o essencial em `OHIP_CONSUMER_STATUS` (estado, ping/pong, RTT, reconexões, fechamentos). O `/metrics` da API junta Oracle + Redis no formato Prometheus (formato texto gerado à mão, sem dependência nova; `prometheus-client` só com ADR).
 - Métricas: estado da conexão, último offset, eventos/min, duplicados, ignorados, não mapeados, DLQ por estágio, atraso (`received_at − event_ts`, `persisted_at − received_at`), pendentes e idade da mais antiga na outbox, mensagens sem rota, reconexões e códigos de fechamento, RTT do heartbeat, tamanho da fila interna.
-- Alertas (RF-11): sem eventos > X min em horário comercial; conexão caída > Y min (bem antes da retenção de 7 dias); DLQ > Z; outbox mais antiga > W min; 4403/4406/`STOPPED` imediatos; 4409 repetido; Redis fora; lease perdido.
+- Alertas (RF-11): sem eventos > X min em horário comercial; conexão caída > Y min (bem antes da retenção de 7 dias); DLQ > Z; outbox mais antiga > W min; 4403/4406/`STOPPED` imediatos; 4409 repetido; Redis fora; lease perdido. Regras no formato Prometheus em `deploy/prometheus/ohip-alerts.yml` (padrão da Q-7; limites a ajustar com a Q-7/Q-8).
 
 ## 11. Segurança e LGPD
 

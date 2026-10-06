@@ -1,0 +1,47 @@
+# Consumer de uma chain (instância = chain_code): systemctl enable --now ohip-consumer@CHAIN1
+# Fora de Uvicorn/Gunicorn (ADR-0001). Um por (appKey, chain, gateway): o lease no Oracle
+# garante isso mesmo com duas VMs (ADR-0008).
+[Unit]
+Description=OHIP Streaming - consumer da chain %i
+Documentation=file:///opt/ohip-streaming/docs/RUNBOOK.md
+After=network-online.target
+Wants=network-online.target
+PartOf=ohip-streaming.target
+# Nunca desistir de reiniciar: a regra dos 10 s vale também após crash (ADR-0007).
+StartLimitIntervalSec=0
+
+[Service]
+Type=exec
+User=ohip
+Group=ohip
+WorkingDirectory=/opt/ohip-streaming
+EnvironmentFile=/etc/ohip/common.env
+EnvironmentFile=/etc/ohip/consumer-%i.env
+# A chain da instância sempre vence a do arquivo de ambiente. %I = nome sem o escape do
+# systemd (uma chain com espaço ou símbolo chegaria como \x20...); o arquivo usa %i.
+ExecStart=/usr/bin/env OHIP_CHAIN_CODE=%I /opt/ohip-streaming/.venv/bin/ohip-consumer
+Restart=always
+# Regra dos 10 s entre conexões, também após crash ou restart (ADR-0007).
+RestartSec=10
+KillSignal=SIGTERM
+# complete → drenagem (OHIP_DRAIN_TIMEOUT_S) → desconexão gravada → lease liberado.
+TimeoutStopSec=90
+# Endurecimento (ADR-0020 §4). O Instant Client grava trace em $HOME (StateDirectory).
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+UMask=0077
+StateDirectory=ohip
+Environment=HOME=/var/lib/ohip
+
+[Install]
+WantedBy=ohip-streaming.target

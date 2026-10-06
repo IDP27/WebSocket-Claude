@@ -1,6 +1,6 @@
 # Runbook — ohip-streaming
 
-> Status: **esqueleto da Fase 0**. Procedimentos completos na Fase 10.
+> Status: **Fase 10** (ADR-0020): deploy com systemd e Nginx, expurgo, teste de carga e alertas. Pendências de ambiente: Q-5 (login do painel), Q-6 (VMs), Q-7 (ferramenta de alertas), Q-8 (pico real) e Q-17 (Oracle de teste).
 
 ## Pré-requisitos (manuais, antes do primeiro deploy)
 
@@ -11,6 +11,47 @@
 5. VM Linux com saída `wss://` 443 para o gateway OHIP, **sem inspeção TLS**, idle timeout de NAT/firewall > 15 s.
 6. Oracle Instant Client 19 instalado; schema e usuários conforme `sql/` (aplicado pelo DBA).
 7. RabbitMQ e Redis acessíveis pela VM.
+8. Usuário `ohip_purge` no Oracle só com `SELECT, DELETE` em `OHIP_DLQ`, `OHIP_OUTBOX` e `OHIP_EVENT_RAW`, e sinônimos (`sql/900_grants_example.sql`; aplicado pelo DBA).
+
+## Instalação na VM (systemd + Nginx, ADR-0020)
+
+1. Usuário de serviço e código:
+
+   ```bash
+   sudo useradd --system --home /var/lib/ohip --shell /usr/sbin/nologin ohip
+   sudo git clone <repo> /opt/ohip-streaming && cd /opt/ohip-streaming
+   sudo poetry install --only main      # .venv em /opt/ohip-streaming/.venv (poetry.toml)
+   ```
+
+2. Instant Client 19 no Linux: registre o diretório no `ldconfig` (`/etc/ld.so.conf.d/oracle-instantclient.conf` + `sudo ldconfig`) e deixe `ORACLE_CLIENT_LIB_DIR` vazio. Segundo a documentação do python-oracledb, no Linux as bibliotecas precisam estar no caminho do sistema antes de o processo subir. As units deixam o disco só leitura (`ProtectSystem=strict`), exceto `/var/lib/ohip` (`HOME` do serviço): confira na primeira subida se o Instant Client grava `sqlnet.log`/`oradiag_*` ali; se tentar gravar no diretório de trabalho, aponte `TNS_ADMIN`/`ADR_BASE` (ou `LOG_DIRECTORY_CLIENT` no `sqlnet.ora`) para `/var/lib/ohip` (checklist da Q-17).
+3. Arquivos de ambiente em `/etc/ohip/` (`0640 root:ohip`, fora do repositório; modelos no `.env.example`):
+
+   | Arquivo | Usado por | Conteúdo |
+   | --- | --- | --- |
+   | `common.env` | consumer, publisher, enricher, API | `APP_*`, `LOG_*`, `ORACLE_*` (usuário `ohip_app`), `REDIS_*`, `RABBITMQ_*` |
+   | `consumer-<CHAIN>.env` | `ohip-consumer@<CHAIN>` | `OHIP_*` da app da chain, `CONSUMER_*`, `LEASE_*` (a chain vem do nome da instância) |
+   | `publisher.env`, `enricher.env` | publisher, enricher (opcionais) | `PUBLISHER_*`, `ENRICHER_*` (e `OHIP_*` se `ENRICHER_REST_ENABLED=true`) |
+   | `api.env` | `ohip-api` | `API_*` |
+   | `admin.env` | `ohip-admin` | só `ADMIN_*`, `APP_*`, `LOG_*` (**nunca** `ORACLE_*`/`REDIS_*`, ADR-0004) |
+   | `purge.env` | `ohip-purge` | `APP_*`, `LOG_*`, `ORACLE_*` com o usuário `ohip_purge`, `PURGE_*` |
+
+4. Units e timer (`deploy/systemd/`):
+
+   ```bash
+   sudo cp deploy/systemd/* /etc/systemd/system/ && sudo systemctl daemon-reload
+   sudo systemctl enable --now ohip-streaming.target ohip-consumer@CHAIN1 ohip-enricher@1
+   systemctl list-dependencies ohip-streaming.target
+   journalctl -u 'ohip-*' -o cat -f     # logs JSON (Q-16: o coletor lê do journald)
+   ```
+
+   - `ohip-consumer@<CHAIN>`: a chain vem do nome da instância (`%I`, sem escape) e vence o arquivo de ambiente; `RestartSec=10` (regra dos 10 s, ADR-0007), nunca desiste de reiniciar, `TimeoutStopSec=90` para drenar e liberar o lease.
+   - `ohip-publisher` e `ohip-enricher@N`: `RestartPreventExitStatus=2` (topologia divergente exige ação humana; `systemctl restart` depois de corrigir).
+   - Mais enrichers: `systemctl enable --now ohip-enricher@2`.
+   - Segunda VM (Q-6): as mesmas units; o lease no Oracle deixa a segunda passiva (consumer e publisher).
+5. Nginx (`deploy/nginx/ohip-streaming.conf`, incluído no bloco `http`): ajuste os pontos marcados `AJUSTAR` e crie em `/etc/nginx/ohip/` (`0640 root:nginx`): `htpasswd` (login do painel até a Q-5), `groups.map` (`usuario ohip-admin;` ou `usuario ohip-read;` por linha; quem não estiver nele leva 403) e `admin-proxy-secret.conf` (`proxy_set_header X-Admin-Proxy-Secret "<o mesmo ADMIN_PROXY_SECRET>";`). Depois `sudo nginx -t && sudo systemctl reload nginx`.
+6. Prometheus (padrão da Q-7): job `ohip-api` lendo `https://<host>/metrics` a partir da rede liberada no Nginx, e as regras de `deploy/prometheus/ohip-alerts.yml` (limites `AJUSTAR` com a Q-7/Q-8).
+
+`tests/contract/test_deploy_files.py` confere esses arquivos contra o código no `make check` (scripts, `RestartSec`, headers do painel, endpoints internos, métricas dos alertas e ausência de segredos).
 
 ## Testes contra o Oracle de teste (Fase 3)
 
@@ -29,9 +70,10 @@ Os cenários de `tests/stores/` rodam no fake e, com estas variáveis, num Oracl
 
 ## Consumer (`ohip-consumer`)
 
-- Um processo por chain (`OHIP_CHAIN_CODE`), nunca dentro de Uvicorn/Gunicorn: `ohip-consumer` (ou `python -m ohip_streaming.entrypoints.consumer`). A unit do systemd com `RestartSec=10` entra na Fase 10.
+- Um processo por chain, nunca dentro de Uvicorn/Gunicorn: `systemctl start ohip-consumer@<CHAIN>` (ou `ohip-consumer` com `OHIP_CHAIN_CODE`).
 - SIGTERM: `complete` → drena → grava a desconexão → libera o lease → sai. Não use `kill -9` (o próximo start espera 10 s inteiros, mas nada se perde).
 - Estado em `OHIP_CONSUMER_STATUS`: `SUBSCRIBED` = recebendo; `WAITING` = aguardando reconexão; `DRAINING` = encerrando a assinatura; `STOPPED` = **ação humana** (4403/4406 ou mensagem grande demais repetida); o processo fica parado até ser reiniciado depois da correção.
+- A mesma linha traz `subscription_id` e `connected_at` (da assinatura), `token_expires_at`, `last_message_at`, `last_ping_at`/`last_pong_at` e `last_rtt_ms` (gravados a cada `CONSUMER_STATUS_INTERVAL_S`, padrão 15 s, e ao fim da conexão), `reconnects` (acumulado), `consecutive_failures` (zera depois de uma sessão saudável) e `next_attempt_at` (horário do banco da próxima tentativa). Falha ao gravar esses campos só gera `status_indisponivel` (aviso): a conexão segue.
 - Logs úteis: `ohip_assinado` (subscription_id, offset: informe ao suporte Oracle), `conexao_envenenada` (fila travada ou banco fora: reconecta pelo offset confirmado), `ohip_sem_prova_de_vida`, `ohip_assinatura_encerrada` (frame `error` do servidor, D-10), `ws_handshake_recusado` (HTTP 400: hash da app key ou URL), `consumer_alerta`/`consumer_parado`.
 
 ## Publisher (`ohip-publisher`)
@@ -59,7 +101,7 @@ Os cenários de `tests/stores/` rodam no fake e, com estas variáveis, num Oracl
 - Prazo de cada consulta da API ao Oracle: `API_ORACLE_CALL_TIMEOUT_MS` (padrão 15 s, separado do consumer). Estourou → 503; consultas lentas recorrentes: veja o plano de execução das listagens (checklist da Q-17).
 - Em produção, `/docs`, `/redoc` e `/openapi.json` ficam desligados.
 - `/metrics` lê os snapshots dos processos pelo conjunto `ohip:metrics_index` (sem varrer o Redis).
-- `GET /api/v1/status` vem do cache do Redis (`ohip:api:status`, 5 s). Campos ainda não gravados pelo consumer (`subscription_id`, `last_message_at`, reconexões, `token_expires_at`) saem `null`/0 (ADR-0017).
+- `GET /api/v1/status` vem do cache do Redis (`ohip:api:status`, 5 s), com os campos que o consumer grava em `OHIP_CONSUMER_STATUS` (ADR-0020 §1).
 
 ## Enricher (`ohip-enricher`)
 
@@ -83,6 +125,22 @@ Os cenários de `tests/stores/` rodam no fake e, com estas variáveis, num Oracl
 - Página 503 "A API de controle não respondeu": confira `ohip-api` (`/ready`). Página 502 "A API recusou o token do painel": os tokens do painel não batem com os hashes da API.
 - Logs: `painel_requisicao` (rota sem query string, usuário, perfil, `request_id`, que também vai para a API em `X-Request-ID`), `painel_erro_api`, `painel_csrf_recusado`.
 
+## Expurgo (`ohip-purge`)
+
+- Timer diário (`ohip-purge.timer`, 03:30 + até 15 min; `Persistent=true` roda ao ligar se perdeu a janela). Manual: `sudo systemctl start ohip-purge` e `journalctl -u ohip-purge -o cat`.
+- Ordem (ARCHITECTURE §5.1): `OHIP_DLQ` resolvida → `OHIP_OUTBOX` `SENT` → `OHIP_OUTBOX` `FAILED` já sem item de DLQ (o item `PUBLISH` foi resolvido e expurgado) → `OHIP_EVENT_RAW` sem outbox nem DLQ. Linhas `PENDING`, `FAILED` com DLQ aberta e DLQ aberta seguram o bruto. Corte: relógio do banco − `PURGE_RETENTION_DAYS` (padrão 90, mínimo 30; Q-9).
+- **Primeira execução em cada ambiente**: deixe `PURGE_DRY_RUN=true` (padrão), confira `expurgo_simulado` (contagem por tabela) no journal e só então ponha `false`. No dry run cada passo conta pelo estado atual: o bruto liberado pela outbox só aparece na execução seguinte.
+- Lotes de `PURGE_BATCH_SIZE` com commit por lote e pausa `PURGE_PAUSE_MS`; para em `PURGE_MAX_RUNTIME_S` ou no SIGTERM depois do lote em curso (`expurgo_interrompido`; o resto fica para o dia seguinte). `expurgo_concluido` traz as linhas por tabela e `complete`.
+- Erro (saída 1, `expurgo_falhou`): os lotes já confirmados ficam; corrija e rode de novo. ORA-01031/00942: grants ou sinônimos do `ohip_purge`.
+- Tabelas de domínio (após a Q-1) não podem ter chave estrangeira para `OHIP_EVENT_RAW` (ADR-0020 §2).
+
+## Teste de carga (RNF-13)
+
+- `make test-load` (fora do `make check`): consumer real contra o servidor OHIP simulado, banco em memória com a latência do Oracle simulada numa thread (`LOAD_DB_BATCH_MS`, `LOAD_DB_EVENT_MS`). Cenários: sustentado a 10× o pico da Q-8 (`LOAD_RATE_PER_S`, padrão 50/s por chain, por `LOAD_DURATION_S`) e rajada de fechamento do dia (`LOAD_BURST_EVENTS`). `LOAD_REPORT=arquivo.jsonl` grava os números.
+- Orçamentos: p95 (envio → commit) ≤ 5 s no sustentado, nada perdido nem duplicado, sem reconexão e memória estável.
+- Medição de 2026-10-05 (Mac de desenvolvimento, Oracle simulado a 100 ms por lote + 1 ms por evento): sustentado 50/s por 60 s → p50 0,31 s, **p95 0,46 s**, p99 0,46 s, RSS +3,6 MB; rajada de 10 000 eventos → ~500 eventos/s, tudo gravado em 19,8 s, sem reconexão nem envenenamento (p95 12 s na rajada: é a fila esvaziando). Orçamento atendido: o Otimizador não foi acionado.
+- Refazer com o Oracle 11g real (checklist da Q-17): medir o tempo de um lote de 200 eventos no adapter, ajustar `LOAD_DB_*` e rodar de novo; com a Q-8 respondida, ajustar `LOAD_RATE_PER_S`.
+
 ## Hash da app key
 
 ```bash
@@ -105,7 +163,7 @@ echo -n "$OHIP_APP_KEY" | sha256sum | cut -d' ' -f1   # hex minúsculo
 - Postman só com a coleção e o environment de `postman/` (sandbox, valores preenchidos só como *current value*, nunca commitados). Para explorar o Streaming no sandbox, use o `graphiql.html` oficial em `vendor/oracle-hospitality-api-docs/graphql/streaming/`.
 - Atualizar as specs da Oracle só com `scripts/sync_oracle_api_docs.sh <commit>` e `make check` verde (ADR-0012).
 - Replay só pela API/painel (`POST /api/v1/replay`); retenção do OHIP é de 7 dias.
-- Expurgo, nesta ordem (chaves estrangeiras): `OHIP_DLQ` resolvida → `OHIP_OUTBOX` `SENT` → `OHIP_EVENT_RAW` sem referência em outbox ou DLQ (`NOT EXISTS`). Linhas `FAILED` e DLQ abertas seguram o bruto até serem resolvidas.
+- Expurgo: só pelo `ohip-purge` (seção acima), nunca `DELETE` manual fora dessa ordem.
 - Alerta `ohip_merge_skipped_total` alto + offset menor que o salvo: o OHIP pode ter reiniciado os offsets (ambiente recriado, D-6). Parar o enricher, confirmar com a Oracle e decidir com o time de dados se as tabelas de domínio devem ser reconstruídas a partir do bruto.
 - Alerta `falha_sistemica_no_lote` (consumer parado em `WAITING`, reconectando sem avançar): duas mensagens seguidas foram recusadas pelo banco sem nenhum progresso entre elas (ADR-0011). Primeiro conferir o Oracle (espaço em tablespace/undo, alert log, objetos inválidos) e corrigir; o consumer volta sozinho na próxima reconexão. Se o banco estiver saudável e o erro for de uma mensagem específica (ver o log e o último item de DLQ `CONSUME` da chain), `systemctl restart ohip-consumer@<chain>`: cada restart isola **uma** mensagem na DLQ. Depois da correção, reprocessar os itens pela API (`POST /api/v1/dlq/{id}/retry`).
 - Alerta `oauth_recusado` (400/401/403 no token): credencial, app key, escopo ou `enterpriseId` errados, ou assinatura ainda não aprovada no Developer Portal. O processo não insiste em seguida; corrija a configuração e reinicie.

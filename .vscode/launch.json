@@ -66,6 +66,17 @@
       "justMyCode": true
     },
     {
+      // Expurgo: PURGE_DRY_RUN=true (padrão) só conta. Nunca contra homologação/produção.
+      "name": "ohip-purge (dry run, Oracle de teste)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "ohip_streaming.entrypoints.purge",
+      "envFile": "${workspaceFolder}/.env",
+      "env": { "PYTHONPATH": "src", "PURGE_DRY_RUN": "true" },
+      "cwd": "${workspaceFolder}",
+      "justMyCode": true
+    },
+    {
       // Servidor de desenvolvimento do Flask (em produção: Gunicorn atrás do Nginx, ADR-0018).
       // Precisa da ohip-api rodando. Sem Nginx, envie o header X-Forwarded-User (e
       // X-Forwarded-Groups) por extensão do navegador ou curl; sem ele, 401.

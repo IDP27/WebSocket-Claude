@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, replace
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
@@ -41,6 +42,7 @@ from ohip_streaming.adapters.oracle.lease_store import OracleLeaseStore
 from ohip_streaming.adapters.oracle.monitoring_store import OracleMonitoringStore
 from ohip_streaming.adapters.oracle.operations_store import OracleOperationsStore
 from ohip_streaming.adapters.oracle.outbox_store import OracleOutboxStore
+from ohip_streaming.adapters.oracle.purge_store import OraclePurgeStore
 from ohip_streaming.adapters.oracle.replay_store import OracleReplayStore
 from ohip_streaming.adapters.oracle.status_store import OracleConsumerStatusStore
 from ohip_streaming.application.ports import (
@@ -51,6 +53,7 @@ from ohip_streaming.application.ports import (
     MonitoringStore,
     OperationsStore,
     OutboxStore,
+    PurgeStore,
     ReplayStore,
 )
 from ohip_streaming.config import OracleSettings
@@ -93,9 +96,14 @@ class Backend:
     leases: LeaseStore
     monitoring: MonitoringStore
     enrichment: EnrichmentStore
+    purge: PurgeStore
 
     def acquire(self, lease: str) -> int:
         """Novo dono do lease: devolve o epoch novo (o anterior vira zumbi)."""
+        raise NotImplementedError
+
+    def age(self, chain: str, days: int) -> None:
+        """Envelhece em ``days`` os horários de bruto, outbox e DLQ da chain (expurgo)."""
         raise NotImplementedError
 
     def epoch(self, lease: str) -> int:
@@ -138,10 +146,24 @@ class MemoryBackend(Backend):
         self.events = self.outbox = self.replay = self.operations = self.status = self.db
         self.leases = MemoryLeaseStore(self.db)
         self.monitoring = MemoryMonitoringStore(self.db)
-        self.enrichment = self.db
+        self.enrichment = self.purge = self.db
 
     def acquire(self, lease: str) -> int:
         return self.db.acquire(lease)
+
+    def age(self, chain: str, days: int) -> None:
+        delta = timedelta(days=days)
+        for row in self.db.raw.values():
+            if row.event.chain_code == chain:
+                row.event = replace(row.event, received_at=row.event.received_at - delta)
+        for o in self.db.outbox.values():
+            if o.chain_code == chain:
+                o.created_at -= delta
+                o.sent_at = o.sent_at - delta if o.sent_at else None
+        for d in self.db.dlq.values():
+            if d.chain_code == chain:
+                d.created_at -= delta
+                d.resolved_at = d.resolved_at - delta if d.resolved_at else None
 
     def epoch(self, lease: str) -> int:
         return self.db.leases[lease]
@@ -183,6 +205,17 @@ class MemoryBackend(Backend):
 
 # ======================================================================= Oracle
 
+
+_AGE_SQL = (
+    """UPDATE ohip_event_raw SET received_at = received_at - NUMTODSINTERVAL(:days, 'DAY')
+ WHERE chain_code = :chain""",
+    """UPDATE ohip_outbox SET created_at = created_at - NUMTODSINTERVAL(:days, 'DAY'),
+       sent_at = sent_at - NUMTODSINTERVAL(:days, 'DAY')
+ WHERE chain_code = :chain""",
+    """UPDATE ohip_dlq SET created_at = created_at - NUMTODSINTERVAL(:days, 'DAY'),
+       resolved_at = resolved_at - NUMTODSINTERVAL(:days, 'DAY')
+ WHERE chain_code = :chain""",
+)
 
 _OUTBOX_SQL = """
 SELECT id, unique_event_id, status, exchange_name, attempts
@@ -256,6 +289,7 @@ class OracleBackend(Backend):
         self.leases = OracleLeaseStore(pooled)
         self.monitoring = OracleMonitoringStore(pooled)
         self.enrichment = OracleEnrichmentStore(pooled, code_version="test")
+        self.purge = OraclePurgeStore(pooled)
         self._reset()
 
     @classmethod
@@ -305,6 +339,9 @@ class OracleBackend(Backend):
     def acquire(self, lease: str) -> int:
         self._execute([_ACQUIRE_SQL], lease=lease)
         return self.epoch(lease)
+
+    def age(self, chain: str, days: int) -> None:
+        self._execute(_AGE_SQL, chain=chain, days=days)  # DML no schema descartável
 
     def epoch(self, lease: str) -> int:
         ((value,),) = self.query(

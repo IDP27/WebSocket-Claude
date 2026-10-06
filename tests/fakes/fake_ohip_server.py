@@ -17,6 +17,7 @@ import contextlib
 import hashlib
 import json
 import re
+import time
 from dataclasses import dataclass, field
 from http import HTTPStatus
 from typing import Any
@@ -46,6 +47,7 @@ class Behavior:
     server_ping: bool = False
     no_ack: bool = False
     hold_after_events: int | None = None  # retém o resto até o complete (drenagem)
+    rate_per_s: float | None = None  # envio ritmado (teste de carga); None = o mais rápido possível
 
 
 @dataclass
@@ -80,6 +82,9 @@ class FakeOhipServer:
         self.init_timeout_s = init_timeout_s
         self.drain_close_delay_s = drain_close_delay_s
         self.inclusive_offset = inclusive_offset  # D-1: o evento do offset pedido volta?
+        # Teste de carga: uniqueEventId → time.perf_counter() do envio (só se ligado).
+        self.track_send_times = False
+        self.sent_at: dict[str, float] = {}
         self._release: asyncio.Event | None = None
         self.behaviors: list[Behavior] = []
         self.connections: list[Connection] = []
@@ -245,6 +250,7 @@ class FakeOhipServer:
             start -= 1
         sent = 0
         self._release = asyncio.Event()
+        started = time.perf_counter()
         for event in self.events:
             if int(event["metadata"]["offset"]) <= start:
                 continue
@@ -264,7 +270,13 @@ class FakeOhipServer:
                     )
                 )
                 return
+            if behavior.rate_per_s is not None:
+                delay = started + sent / behavior.rate_per_s - time.perf_counter()
+                if delay > 0:
+                    await asyncio.sleep(delay)
             frame = {"id": sub_id, "type": "next", "payload": {"data": {"newEvent": event}}}
+            if self.track_send_times:
+                self.sent_at[event["metadata"]["uniqueEventId"]] = time.perf_counter()
             await ws.send(json.dumps(frame))
             sent += 1
 

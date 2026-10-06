@@ -24,6 +24,7 @@ _PREFIXES = (
     "PUBLISHER_",
     "ADMIN_",
     "ENRICHER_",
+    "PURGE_",
 )
 
 

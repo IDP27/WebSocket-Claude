@@ -26,6 +26,7 @@ from ohip_streaming.application.ports import (
     BatchToPersist,
     ChainStatus,
     Clock,
+    ConnectionHealth,
     ConsumeRetryItem,
     DisconnectSnapshot,
     DlqEntry,
@@ -45,6 +46,7 @@ from ohip_streaming.application.ports import (
     PageRequest,
     ProcessingStatus,
     PublishOutcome,
+    PurgeTarget,
     ReplayEntry,
     ReplayQuery,
     ReplayRequest,
@@ -199,6 +201,7 @@ class DlqRecord:
     attempts: int = 0
     resolution: str | None = None
     resolved_by: str | None = None
+    resolved_at: datetime | None = None
     retry_requested_at: datetime | None = None
     retry_requested_by: str | None = None
 
@@ -207,6 +210,27 @@ class DlqRecord:
 class OffsetState:
     last_offset: Offset | None = None
     last_unique_event_id: str | None = None
+
+
+@dataclass(frozen=True)
+class StatusRow:
+    """Uma linha de OHIP_CONSUMER_STATUS."""
+
+    state: ConsumerState
+    instance_id: str | None = None
+    last_disconnect_at: datetime | None = None
+    last_close_code: int | None = None
+    last_close_reason: str | None = None
+    subscription_id: str | None = None
+    connected_at: datetime | None = None
+    token_expires_at: datetime | None = None
+    last_message_at: datetime | None = None
+    last_ping_at: datetime | None = None
+    last_pong_at: datetime | None = None
+    rtt_ms: int | None = None
+    reconnects: int = 0
+    consecutive_failures: int = 0
+    next_attempt_at: datetime | None = None
 
 
 @dataclass
@@ -221,10 +245,7 @@ class InMemoryDatabase:
     dlq: dict[int, DlqRecord] = field(default_factory=dict)
     replays: dict[int, ReplayRequest] = field(default_factory=dict)
     cancelled_by: dict[int, str] = field(default_factory=dict)
-    # chain → (estado, instance_id, last_disconnect_at, último código de fechamento)
-    statuses: dict[str, tuple[ConsumerState, str | None, datetime | None, int | None]] = field(
-        default_factory=dict
-    )
+    statuses: dict[str, StatusRow] = field(default_factory=dict)  # OHIP_CONSUMER_STATUS
     domain_tables: dict[tuple[str, tuple[Any, ...]], tuple[dict[str, Any], int]] = field(
         default_factory=dict
     )
@@ -233,6 +254,7 @@ class InMemoryDatabase:
     fail_persist_when: Callable[[BatchToPersist], Exception | None] | None = None
     row_errors: dict[str, tuple[str, str]] = field(default_factory=dict)  # uid → (classe, msg)
     fail_apply: list[Exception] = field(default_factory=list)
+    fail_status: list[Exception] = field(default_factory=list)  # OHIP_CONSUMER_STATUS
     fail_add_dlq: list[Exception] = field(default_factory=list)
     persisted_batches: list[BatchToPersist] = field(default_factory=list)
     # Uma sequence por tabela, como na DDL (sql/001_sequences.sql).
@@ -243,7 +265,7 @@ class InMemoryDatabase:
     def provision_chain(self, chain_code: str) -> None:
         self.offsets.setdefault(chain_code, OffsetState())
         self.leases.setdefault(f"consumer:{chain_code}", 0)
-        self.statuses.setdefault(chain_code, (ConsumerState.STOPPED, None, None, None))
+        self.statuses.setdefault(chain_code, StatusRow(ConsumerState.STOPPED))
 
     def acquire(self, lease_name: str) -> int:
         self.leases[lease_name] = self.leases.get(lease_name, 0) + 1
@@ -352,6 +374,7 @@ class InMemoryDatabase:
             else:
                 retry_item.resolution = "RETRIED"
                 retry_item.resolved_by = "consumer"
+                retry_item.resolved_at = self.clock.now()
         if batch.offset is not None:
             self.offsets[batch.chain_code] = OffsetState(batch.offset, batch.last_unique_event_id)
         self.persisted_batches.append(batch)
@@ -384,6 +407,7 @@ class InMemoryDatabase:
 
     def _resolve(self, item: DlqRecord, resolved_by: str) -> None:
         item.resolution, item.resolved_by = "RETRIED", resolved_by
+        item.resolved_at = self.clock.now()
         item.retry_requested_at = item.retry_requested_by = None
 
     def _outbox_record(
@@ -518,16 +542,44 @@ class InMemoryDatabase:
 
     # ----------------------------------------------------------- ConsumerStatusStore
 
-    def _status(
-        self, chain_code: str
-    ) -> tuple[ConsumerState, str | None, datetime | None, int | None]:
+    def _status(self, chain_code: str) -> StatusRow:
         if chain_code not in self.statuses:
             raise UnknownChainError(chain_code)
+        if self.fail_status:
+            raise self.fail_status.pop(0)
         return self.statuses[chain_code]
 
     async def record_state(self, chain_code: str, state: ConsumerState, instance_id: str) -> None:
-        _, _, disconnected_at, code = self._status(chain_code)
-        self.statuses[chain_code] = (state, instance_id, disconnected_at, code)
+        row = self._status(chain_code)
+        self.statuses[chain_code] = replace(row, state=state, instance_id=instance_id)
+
+    async def record_subscribed(
+        self,
+        chain_code: str,
+        instance_id: str,
+        subscription_id: str,
+        token_expires_at: datetime,
+    ) -> None:
+        row = self._status(chain_code)
+        self.statuses[chain_code] = replace(
+            row,
+            state=ConsumerState.SUBSCRIBED,
+            instance_id=instance_id,
+            subscription_id=subscription_id,
+            connected_at=self.clock.now(),
+            token_expires_at=token_expires_at,
+            next_attempt_at=None,
+        )
+
+    async def record_health(self, chain_code: str, health: ConnectionHealth) -> None:
+        row = self._status(chain_code)
+        self.statuses[chain_code] = replace(
+            row,
+            last_message_at=health.last_message_at or row.last_message_at,
+            last_ping_at=health.last_ping_at or row.last_ping_at,
+            last_pong_at=health.last_pong_at or row.last_pong_at,
+            rtt_ms=row.rtt_ms if health.rtt_ms is None else health.rtt_ms,
+        )
 
     async def record_disconnect(
         self,
@@ -535,13 +587,70 @@ class InMemoryDatabase:
         state: ConsumerState,
         close_code: int | None,
         close_reason: str | None,
+        *,
+        consecutive_failures: int = 0,
+        reconnect: bool = False,
+        next_attempt_in_s: float | None = None,
     ) -> None:
-        _, instance_id, _, _ = self._status(chain_code)
-        self.statuses[chain_code] = (state, instance_id, self.clock.now(), close_code)
+        row = self._status(chain_code)
+        now = self.clock.now()
+        self.statuses[chain_code] = replace(
+            row,
+            state=state,
+            last_disconnect_at=now,
+            last_close_code=close_code,
+            last_close_reason=close_reason,
+            consecutive_failures=consecutive_failures,
+            reconnects=row.reconnects + (1 if reconnect else 0),
+            next_attempt_at=(
+                None if next_attempt_in_s is None else now + timedelta(seconds=next_attempt_in_s)
+            ),
+        )
 
     async def disconnect_snapshot(self, chain_code: str) -> DisconnectSnapshot:
-        state, _, disconnected_at, _ = self._status(chain_code)
-        return DisconnectSnapshot(self.clock.now(), disconnected_at, state)
+        row = self._status(chain_code)
+        return DisconnectSnapshot(self.clock.now(), row.last_disconnect_at, row.state)
+
+    # ----------------------------------------------------------- PurgeStore (ADR-0020 §2)
+
+    def _expired(self, target: PurgeTarget, retention_days: int) -> list[int]:
+        cutoff = self.clock.now() - timedelta(days=retention_days)
+        if target is PurgeTarget.DLQ:
+            ids = [d.id for d in self.dlq.values() if d.resolved_at and d.resolved_at < cutoff]
+        elif target in (PurgeTarget.OUTBOX, PurgeTarget.OUTBOX_FAILED):
+            referenced: set[int | None] = {d.outbox_id for d in self.dlq.values()}
+
+            def expired(o: OutboxRecord) -> bool:
+                if target is PurgeTarget.OUTBOX:
+                    return o.status == "SENT" and o.sent_at is not None and o.sent_at < cutoff
+                return o.status == "FAILED" and o.created_at < cutoff
+
+            ids = [o.id for o in self.outbox.values() if expired(o) and o.id not in referenced]
+        else:
+            referenced = {o.raw_event_id for o in self.outbox.values()}
+            referenced |= {d.event_raw_id for d in self.dlq.values()}
+            ids = [
+                r.id
+                for r in self.raw.values()
+                if r.event.received_at < cutoff and r.id not in referenced
+            ]
+        return sorted(ids)
+
+    async def purge_batch(self, target: PurgeTarget, retention_days: int, batch_size: int) -> int:
+        tables: dict[PurgeTarget, dict[int, Any]] = {
+            PurgeTarget.DLQ: self.dlq,
+            PurgeTarget.OUTBOX: self.outbox,
+            PurgeTarget.OUTBOX_FAILED: self.outbox,
+            PurgeTarget.RAW: self.raw,
+        }
+        table = tables[target]
+        ids = self._expired(target, retention_days)[:batch_size]
+        for row_id in ids:
+            del table[row_id]
+        return len(ids)
+
+    async def count_expired(self, target: PurgeTarget, retention_days: int) -> int:
+        return len(self._expired(target, retention_days))
 
     # ----------------------------------------------------------- OperationsStore / Enrichment
 
@@ -789,9 +898,7 @@ class MemoryMonitoringStore:
         db = self.db
         now = db.clock.now()
         chains = []
-        for chain_code, (state, instance_id, disconnected_at, close_code) in sorted(
-            db.statuses.items()
-        ):
+        for chain_code, row in sorted(db.statuses.items()):
             pending = [
                 o
                 for o in db.outbox.values()
@@ -816,20 +923,20 @@ class MemoryMonitoringStore:
             chains.append(
                 ChainStatus(
                     chain_code=chain_code,
-                    state=state,
-                    instance_id=instance_id,
-                    subscription_id=None,
+                    state=row.state,
+                    instance_id=row.instance_id,
+                    subscription_id=row.subscription_id,
                     last_offset=offset.last_offset if offset else None,
-                    last_message_at=None,
+                    last_message_at=row.last_message_at,
                     lag_seconds_p95_5m=_percentile_cont(lags, 0.95),
                     events_last_5m=len(recent),
-                    reconnects_total=0,
-                    consecutive_failures=0,
-                    next_attempt_at=None,
-                    last_close_code=close_code,
-                    last_close_reason=None,
-                    last_disconnect_at=disconnected_at,
-                    token_expires_at=None,
+                    reconnects_total=row.reconnects,
+                    consecutive_failures=row.consecutive_failures,
+                    next_attempt_at=row.next_attempt_at,
+                    last_close_code=row.last_close_code,
+                    last_close_reason=row.last_close_reason,
+                    last_disconnect_at=row.last_disconnect_at,
+                    token_expires_at=row.token_expires_at,
                     outbox=OutboxCounts(
                         len(pending),
                         len(failed),
@@ -984,7 +1091,7 @@ class MemoryMonitoringStore:
             created_at=d.created_at,
             retry_requested_at=d.retry_requested_at,
             retry_requested_by=d.retry_requested_by,
-            resolved_at=d.created_at if d.resolution is not None else None,
+            resolved_at=d.resolved_at,
             resolved_by=d.resolved_by,
             resolution=d.resolution,
         )

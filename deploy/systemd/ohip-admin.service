@@ -1,0 +1,39 @@
+# Painel (ADR-0018): Gunicorn em 127.0.0.1:8081, atrás do Nginx. Só fala com a API: o
+# arquivo de ambiente é só dele, sem ORACLE_*/REDIS_*/RABBITMQ_* (ADR-0004).
+[Unit]
+Description=OHIP Streaming - painel operacional
+Documentation=file:///opt/ohip-streaming/docs/UI.md
+After=network-online.target ohip-api.service
+Wants=network-online.target
+PartOf=ohip-streaming.target
+
+[Service]
+Type=exec
+User=ohip
+Group=ohip
+WorkingDirectory=/opt/ohip-streaming
+EnvironmentFile=/etc/ohip/admin.env
+ExecStart=/opt/ohip-streaming/.venv/bin/ohip-admin
+Restart=always
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=30
+# Endurecimento (ADR-0020 §4). O Instant Client grava trace em $HOME (StateDirectory).
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+UMask=0077
+StateDirectory=ohip
+Environment=HOME=/var/lib/ohip
+
+[Install]
+WantedBy=ohip-streaming.target

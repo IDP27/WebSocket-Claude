@@ -153,7 +153,7 @@ CREATE TABLE ohip_consumer_status (
     last_message_at     TIMESTAMP(6),
     last_rtt_ms         NUMBER(10),                         -- RTT suavizado do heartbeat
     reconnects          NUMBER(10)      DEFAULT 0 NOT NULL,   -- acumulado
-    consecutive_failures NUMBER(5)      DEFAULT 0 NOT NULL,   -- zera ao assinar com sucesso
+    consecutive_failures NUMBER(5)      DEFAULT 0 NOT NULL,   -- zera após sessão saudável (ADR-0020)
     last_close_code     NUMBER(5),
     last_close_reason   VARCHAR2(500),
     last_disconnect_at  TIMESTAMP(6),                       -- relógio do banco; regra dos 10 s após crash/restart

@@ -1,0 +1,43 @@
+# Enricher (ADR-0019), N instâncias: systemctl enable --now ohip-enricher@1 ohip-enricher@2
+# Sem lease: o MERGE condicional garante a ordem. Sem regras até a Q-1.
+[Unit]
+Description=OHIP Streaming - enricher %i
+Documentation=file:///opt/ohip-streaming/docs/RUNBOOK.md
+After=network-online.target
+Wants=network-online.target
+PartOf=ohip-streaming.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=exec
+User=ohip
+Group=ohip
+WorkingDirectory=/opt/ohip-streaming
+EnvironmentFile=/etc/ohip/common.env
+EnvironmentFile=-/etc/ohip/enricher.env
+ExecStart=/opt/ohip-streaming/.venv/bin/ohip-enricher
+Restart=always
+RestartSec=5
+# Fila ohip.enricher com argumentos divergentes: saída 2 (exige ação humana).
+RestartPreventExitStatus=2
+KillSignal=SIGTERM
+TimeoutStopSec=60
+# Endurecimento (ADR-0020 §4). O Instant Client grava trace em $HOME (StateDirectory).
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+UMask=0077
+StateDirectory=ohip
+Environment=HOME=/var/lib/ohip
+
+[Install]
+WantedBy=ohip-streaming.target

@@ -1,0 +1,9 @@
+# Agrupa os processos: systemctl start|stop ohip-streaming.target
+# Consumers e enrichers entram pelas instâncias habilitadas (ohip-consumer@CHAIN.service,
+# ohip-enricher@N.service), que têm WantedBy=ohip-streaming.target.
+[Unit]
+Description=OHIP Streaming - todos os processos
+Wants=ohip-publisher.service ohip-api.service ohip-admin.service ohip-purge.timer
+
+[Install]
+WantedBy=multi-user.target
