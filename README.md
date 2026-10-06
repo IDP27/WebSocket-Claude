@@ -2,11 +2,23 @@
 
 Consumidor de eventos do OPERA Cloud pela **OHIP Streaming API** (WebSocket + GraphQL). Grava cada evento no Oracle 11g sem perda nem duplicidade e publica no RabbitMQ via outbox para BI, integrações e n8n.
 
-> **Status: Fases 0 a 10 concluídas** (a Fase 10 trouxe status completo do consumer, expurgo, teste de carga, systemd, Nginx e alertas; ADR-0020). Refatorações do diagnóstico `/entender` concluídas (passos 1 e 3 a 7: esperas e backoff únicos, ports e fakes por contexto, sessão do consumer, montagem comum dos processos e painel em módulos). Próximo passo: regras do enricher após a Q-1. Pendentes: respostas da Q-1/Q-2 (regras do enricher), Oracle 11g de teste (Q-17), sandbox OHIP e RabbitMQ de teste. Veja [docs/PLAN.md](docs/PLAN.md).
+> **Status: Fases 0 a 10 concluídas** (a Fase 10 trouxe status completo do consumer, expurgo, teste de carga, systemd, Nginx e alertas; ADR-0020). Refatorações do diagnóstico `/entender` concluídas (passos 1 e 3 a 7: esperas e backoff únicos, ports e fakes por contexto, sessão do consumer, montagem comum dos processos e painel em módulos). O código está pronto até onde dá sem respostas externas; o que falta está em [Pendências externas](#pendências-externas). Veja [docs/PLAN.md](docs/PLAN.md).
 >
 > **Processos**: `ohip-consumer` (WebSocket OHIP → Oracle), `ohip-publisher` (outbox → RabbitMQ), `ohip-enricher` (fila → normalização no Oracle; sem regras até a Q-1, [ADR-0019](docs/adr/0019-enricher.md)), `ohip-purge` (expurgo diário por retenção), `ohip-api` (API de controle, [docs/API.md](docs/API.md)) e `ohip-admin` (painel em `/admin`, [docs/UI.md](docs/UI.md)), scripts do `pyproject.toml`.
 >
 > **Endpoints**: a API de controle está em [docs/API.md](docs/API.md) (OpenAPI em `/docs` fora de produção); o painel fica em `/admin` atrás do Nginx (login no Nginx/SSO, Q-5). As APIs da Oracle que o projeto chama estão em [postman/](postman/README.md).
+
+## Pendências externas
+
+Nada abaixo depende de código novo: cada item espera uma resposta ou um ambiente. Os pacotes em [docs/pendencias/](docs/pendencias/) estão prontos para enviar.
+
+| Pendência | Quem resolve | O que destrava | Pacote |
+| --- | --- | --- | --- |
+| **Q-1**: quais eventos e hotéis entram (e a Q-2: buscar o recurso completo na REST?) | Negócio | Fase 9b: regras do enricher e tabelas de domínio (proibidas antes da resposta) | [Q-1-escopo-de-eventos.md](docs/pendencias/Q-1-escopo-de-eventos.md) |
+| **Q-17**: schema Oracle 11g de teste descartável e VM x86_64 com Instant Client 19 | DBA da Aviva | Testes de integração do Oracle (Fase 3), planos de execução, expurgo e carga com banco real (Fase 10) | [Q-17-pedido-ao-dba.md](docs/pendencias/Q-17-pedido-ao-dba.md) |
+| **Sandbox OHIP**: streaming habilitado, app de desenvolvimento e eventos aprovados | Oracle (workshop B93152 ou SR) e dono do ambiente | Validação do consumer (Fase 5) e dos pontos D da documentação | [sandbox-ohip.md](docs/pendencias/sandbox-ohip.md) |
+| **RabbitMQ e Redis de teste da empresa** | Infraestrutura | Repetir os testes de integração no ambiente da empresa. Já passaram em contêineres locais (Redis 7 e RabbitMQ 3, 12 de 12) | [RUNBOOK](docs/RUNBOOK.md) |
+| **Q-5, Q-6, Q-7, Q-8**: login do painel, VMs, ferramenta de alertas, pico de eventos | Projeto e infraestrutura | Ajuste dos padrões de deploy; limites `# AJUSTAR` em [ohip-alerts.yml](deploy/prometheus/ohip-alerts.yml); teste de carga com o número real | [OPEN_QUESTIONS](docs/OPEN_QUESTIONS.md) |
 
 ## Ambiente de desenvolvimento
 
@@ -40,6 +52,7 @@ Abra `ohip-streaming.code-workspace` e instale as extensões recomendadas (aviso
 | [docs/UI.md](docs/UI.md) | Painel operacional (Flask) e wireframes |
 | [docs/PLAN.md](docs/PLAN.md) | Plano por fases e caminho crítico |
 | [docs/OPEN_QUESTIONS.md](docs/OPEN_QUESTIONS.md) | Perguntas em aberto e divergências PRD × documentação |
+| [docs/pendencias/](docs/pendencias/) | Pacotes prontos para destravar as pendências externas (Q-1, Q-17, sandbox) |
 | [docs/OHIP_APIS.md](docs/OHIP_APIS.md) | APIs da Oracle usadas (Streaming, OAuth, REST do enricher) conferidas contra as specs oficiais |
 | [vendor/oracle-hospitality-api-docs/](vendor/oracle-hospitality-api-docs/PROVENANCE.md) | Cópia fixada das specs oficiais da Oracle (ADR-0012); atualizar com `scripts/sync_oracle_api_docs.sh` |
 | [postman/](postman/README.md) | Coleção e environment-modelo do Postman (sandbox) |
