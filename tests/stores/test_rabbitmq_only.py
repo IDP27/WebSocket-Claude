@@ -165,3 +165,92 @@ async def test_enricher_consumer_receives_reprocess_and_bound_events(topology: T
         assert [(m.message_id, m.is_reprocess) for m in received] == [("r1", True), ("e1", False)]
     finally:
         await pub.close()
+
+
+async def test_enricher_consumer_requeues_and_discards(topology: Topology) -> None:
+    """``REQUEUE`` devolve a mensagem para a fila (volta como reentrega); corpo ilegível
+    leva ``ack`` e não volta (ADR-0019)."""
+    from ohip_streaming.adapters.rabbitmq.consumer import AioPikaQueueConsumer, ConsumerOptions
+    from ohip_streaming.application.use_cases.enrich_event import InboundMessage
+    from ohip_streaming.application.use_cases.enricher_service import Disposition
+
+    assert _URL is not None
+    pub = AioPikaPublisher(url=_URL, topology=topology)
+    try:
+        bad = OutgoingMessage(topology.reprocess_exchange, "ohip.rsv.X", "ruim", b"{nao-json", {})
+        assert await pub.publish(bad) is PublishOutcome.ACKED
+        good = message(topology.reprocess_exchange, "ohip.rsv.X", "m1")
+        assert await pub.publish(good) is PublishOutcome.ACKED
+        options = ConsumerOptions(
+            queue=topology.enricher_queue,
+            events_exchange=topology.events_exchange,
+            reprocess_exchange=topology.reprocess_exchange,
+            prefetch=1,
+        )
+        seen: list[str] = []
+        stop = asyncio.Event()
+
+        async def handler(inbound: InboundMessage) -> Disposition:
+            seen.append(inbound.message_id)
+            if len(seen) == 1:
+                return Disposition.REQUEUE
+            stop.set()
+            return Disposition.ACK
+
+        await asyncio.wait_for(AioPikaQueueConsumer(_URL, options).run(handler, stop), 15)
+        assert seen == ["m1", "m1"]  # "ruim" nunca chega ao handler
+
+        connection = await aio_pika.connect(_URL)
+        try:
+            channel = await connection.channel()
+            queue = await channel.get_queue(topology.enricher_queue)
+            assert queue.declaration_result.message_count == 0  # nada ficou para trás
+        finally:
+            await connection.close()
+    finally:
+        await pub.close()
+
+
+async def test_enricher_queue_with_other_arguments_is_misconfigured() -> None:
+    """Fila já declarada com outros argumentos: ``BrokerMisconfiguredError`` (o processo sai
+    com código 2), sem laço de reconexão (ADR-0019)."""
+    from ohip_streaming.adapters.rabbitmq.consumer import AioPikaQueueConsumer, ConsumerOptions
+    from ohip_streaming.application.errors import BrokerMisconfiguredError
+    from ohip_streaming.application.use_cases.enricher_service import Disposition
+
+    assert _URL is not None
+    name = f"t{uuid.uuid4().hex[:8]}.enricher"
+    connection = await aio_pika.connect(_URL)
+    try:
+        channel = await connection.channel()
+        await channel.declare_queue(name, durable=True, arguments={"x-max-length": 10})
+
+        async def handler(_: object) -> Disposition:
+            raise AssertionError("não deveria consumir")
+
+        consumer = AioPikaQueueConsumer(_URL, ConsumerOptions(queue=name))
+        with pytest.raises(BrokerMisconfiguredError):
+            await asyncio.wait_for(consumer.run(handler, asyncio.Event()), 15)
+    finally:
+        channel = await connection.channel()
+        await channel.queue_delete(name)
+        await connection.close()
+
+
+async def test_probe_broker() -> None:
+    """``/ready``: conexão abre e fecha; porta errada vira ``BrokerUnavailableError`` sem a URL
+    (que tem a senha) na mensagem (ADR-0017 §8)."""
+    from urllib.parse import urlsplit, urlunsplit
+
+    from ohip_streaming.adapters.rabbitmq.probe import probe_broker
+
+    assert _URL is not None
+    await probe_broker(_URL, timeout_s=5)
+    parts = urlsplit(_URL)
+    credentials = parts.netloc.rpartition("@")[0]
+    netloc = f"{credentials}@{parts.hostname}:1" if credentials else f"{parts.hostname}:1"
+    wrong = urlunsplit(parts._replace(netloc=netloc))  # mesmo host, porta 1: conexão recusada
+    with pytest.raises(BrokerUnavailableError) as caught:
+        await probe_broker(wrong, timeout_s=5)
+    assert wrong not in str(caught.value)
+    assert (parts.password or "\0") not in str(caught.value)

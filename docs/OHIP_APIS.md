@@ -87,7 +87,7 @@ Headers obrigatórios em todas: `authorization`, `x-app-key` e **`x-hotelid`**, 
 - `ohip-streaming.postman_collection.json`: só o que o projeto usa. Token nos dois modos (o script guarda o token e calcula o `HashedAppKey`), `getReservation` e `getProfile`.
 - `ohip-streaming.postman_environment.json`: modelo com as 14 variáveis, **todos os valores vazios** e os segredos marcados como `secret`.
 - `tests/contract/test_postman_collection.py` garante três coisas: toda chamada da coleção existe na spec oficial com os headers obrigatórios; o environment do repositório não tem valores; nenhuma credencial literal entra na coleção.
-- O Streaming **não** é testado pelo Postman. O Postman não mantém o heartbeat, e uma conexão dele disputa o consumidor único (4409). Para explorar o sandbox, use o `graphiql.html` oficial com a app key do sandbox (RUNBOOK).
+- O Streaming **não** é testado pelo Postman. O Postman não mantém o heartbeat, e uma conexão dele disputa o consumidor único (4409). Para explorar o sandbox, use o `graphiql.html` oficial com a app key e um token OAuth do sandbox (RUNBOOK; roteiro em `docs/pendencias/sandbox-ohip.md`).
 
 ## 6. O que não usamos, e por quê
 

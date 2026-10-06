@@ -83,7 +83,7 @@ Os cenários de `tests/stores/` rodam no fake e, com estas variáveis, num Oracl
 - Mensagens em `ohip.unrouted`: alguém publica um evento que nenhuma fila assinou. Crie a binding certa ou confirme que o evento pode ser ignorado.
 - Saída com código 2 e `publisher_topologia_divergente`: um exchange ou fila nossa já existe no broker com outros argumentos, ou o usuário não tem permissão de declarar. Corrija no broker (ou ajuste a configuração) antes de reiniciar. A unit do systemd usa `RestartPreventExitStatus=2` para não reiniciar em laço.
 - `broker_indisponivel` repetido: broker fora ou rede; nenhuma tentativa é gasta e nada vai para a DLQ, por mais que dure. Linhas `FAILED` + DLQ `PUBLISH` só por `nack` ou mensagem grande demais; reprocesse pela API.
-- Testes contra um RabbitMQ de teste (vhost descartável): `TEST_RABBITMQ_URL` + `TEST_RABBITMQ_DISPOSABLE=sim` e `make test-integration`.
+- Testes contra um RabbitMQ de teste (vhost descartável): `TEST_RABBITMQ_URL` + `TEST_RABBITMQ_DISPOSABLE=sim` e `make test-integration`. Com um Redis de teste descartável, `TEST_REDIS_URL` + `TEST_REDIS_DISPOSABLE=sim` roda também os testes de Redis (caches, dedup do enricher, snapshots de métricas e cache de status da API). Na máquina do desenvolvedor, qualquer Redis e RabbitMQ descartáveis servem, por exemplo os contêineres oficiais `redis:7` e `rabbitmq:3` só em `127.0.0.1`.
 
 ## API de controle (`ohip-api`)
 

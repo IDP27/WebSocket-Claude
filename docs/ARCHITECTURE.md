@@ -250,7 +250,7 @@ Propriedades AMQP: `message_id=<uniqueEventId>`, `content_type=application/json`
 }
 ```
 
-- `event_ts` e `received_at` saem sempre em UTC, ISO 8601 com milissegundos e `Z`. O `timestamp` do OHIP vem sem fuso e é interpretado no fuso `OHIP_EVENT_TZ` (D-3); o valor original continua no payload bruto. `timestamp` ilegível → `event_ts: null`.
+- `event_ts` e `received_at` saem sempre em UTC, ISO 8601 com milissegundos e `Z`. O `timestamp` do OHIP vem sem fuso e é interpretado no fuso `OHIP_EVENT_TIMEZONE` (D-3); o valor original continua no payload bruto. `timestamp` ilegível → `event_ts: null`.
 - `detail` passa pela máscara LGPD (ADR-0011, até a resposta da Q-9): no módulo `PROFILE` tudo é mascarado, exceto uma lista de elementos seguros (tipos, indicadores, códigos); nos demais módulos, os elementos cujo nome casa com padrões de dado pessoal do guia (`NAME`, `NAME2`, `XFIRST NAME`, `ADDRESS1`, `TAX NUMBER`, `ID PLACE`, `EMAIL`, `PHONE`, `BIRTH DATE`, `COMMENTS`, `UDF CHAR1`, cartão etc.) mais a lista configurável. Quem precisa do valor real lê o Oracle com permissão.
 - Mudança incompatível → `schema_version` novo + ADR (RNF-15). Campo novo opcional não muda a versão.
 

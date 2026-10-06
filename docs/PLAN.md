@@ -31,6 +31,17 @@ Uma por vez, cada uma com testes de caracterização escritos antes, revisão e 
 | 6 | Composição comum dos processos assíncronos (`entrypoints/runtime.py`: `setup_logging`, `stop_on_signals`, `metrics_snapshots`) | ✅ aprovada |
 | 7 | Separar o painel em identidade, erros e rotas (`admin/identity.py`, `errors.py`, `templating.py`, `views.py`, `context.py`) | ✅ aprovada |
 
+## Preparação para as pendências externas (sem a Q-1)
+
+Nada aqui cria regra de evento nem tabela de domínio (CLAUDE.md). Só deixa pronto o que destrava cada pendência quando ela chegar.
+
+| Entrega | Destrava | Estado |
+| --- | --- | --- |
+| Pacote de decisão da Q-1 (`docs/pendencias/Q-1-escopo-de-eventos.md`): o que a doc oficial diz, perguntas a responder, passos da Fase 9b | Fase 9b (regras e tabelas de domínio) | ✅ aprovada |
+| Pedido ao DBA da Aviva e checklist do ambiente (`docs/pendencias/Q-17-pedido-ao-dba.md`) | Validação das Fases 3 e 10 no Oracle 11g real | ✅ aprovada |
+| Checklist único do sandbox (`docs/pendencias/sandbox-ohip.md`): D-1, D-3, D-4, D-7–D-11, D-13 e o ciclo de vida do consumer | Validação da Fase 5 | ✅ aprovada |
+| Testes de integração que faltavam contra Redis e RabbitMQ reais (`tests/stores/test_redis_only.py`, `test_rabbitmq_only.py`): dedup e cache REST do enricher, snapshot de métricas lido pela API, cache de status, `REQUEUE`/descarte e fila divergente do enricher, `probe_broker` | Validação das Fases 6, 7 e 9 em broker e Redis reais. **Rodaram em 2026-10-06** contra Redis 7 e RabbitMQ 3 descartáveis (contêineres oficiais, Mac local): 12 de 12, incluindo os 6 testes das Fases 4 e 6 que nunca tinham rodado num broker real. Falta repetir no RabbitMQ e no Redis de teste da empresa (RUNBOOK, pré-requisito 7) | ✅ aprovada |
+
 ## Caminho crítico
 
 ```
