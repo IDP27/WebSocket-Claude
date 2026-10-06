@@ -10,11 +10,11 @@ curso e para; o resto fica para a próxima execução (cada lote é independente
 from __future__ import annotations
 
 import asyncio
-import contextlib
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 from ohip_streaming.application.ports import PURGE_ORDER, Clock, PurgeStore, PurgeTarget
+from ohip_streaming.application.timing import sleep_or_stop
 from ohip_streaming.logging import get_logger
 
 log = get_logger(__name__)
@@ -76,14 +76,4 @@ class PurgeExpiredData:
 
     async def _pause(self, stop: asyncio.Event) -> None:
         """Entre lotes: alivia undo/redo e a concorrência com o consumer; a parada interrompe."""
-        if self._options.pause_s <= 0 or stop.is_set():
-            return
-        sleeper = asyncio.ensure_future(self._clock.sleep(self._options.pause_s))
-        stopper = asyncio.ensure_future(stop.wait())
-        try:
-            await asyncio.wait({sleeper, stopper}, return_when=asyncio.FIRST_COMPLETED)
-        finally:
-            for task in (sleeper, stopper):
-                task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await task
+        await sleep_or_stop(self._options.pause_s, stop, sleep=self._clock.sleep)

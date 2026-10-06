@@ -11,6 +11,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import StrEnum
 
+from ohip_streaming.domain.backoff import exponential_backoff
+
 # Códigos de fechamento documentados (guia Oracle, Troubleshooting).
 NORMAL_CLOSE = 1000
 UNAUTHORIZED = 4401
@@ -71,7 +73,7 @@ Random = Callable[[], float]  # devolve um número em [0, 1)
 
 
 def _exponential_backoff(policy: ReconnectPolicy, attempt: int, rng: Random) -> float:
-    base = min(policy.backoff_max_s, policy.backoff_initial_s * float(2 ** max(0, attempt - 1)))
+    base = exponential_backoff(attempt, policy.backoff_initial_s, policy.backoff_max_s)
     return base * (1 + policy.backoff_jitter_ratio * rng())
 
 

@@ -17,6 +17,20 @@
 | 9. Enricher ✅ aprovada (esqueleto; regras após a Q-1) | Esqueleto com cache, rate limit, `MERGE`; regras por evento após Q-1 | M (esqueleto) / G (regras) | 6 | Q-1, Q-2, assinatura das APIs REST |
 | 10. Endurecimento ✅ aprovada (ADR-0020; carga medida com Oracle simulado, Oracle real na Q-17) | Teste de carga 10× (Otimizador), `/entender` geral, systemd, Nginx, expurgo, RUNBOOK, README; consumer gravando `subscription_id`, `last_message_at`, reconexões, `token_expires_at` e ping/pong em `OHIP_CONSUMER_STATUS` (pendência do status da API, ADR-0017) | G | 5–9 | Q-6, Q-7, Q-8 |
 
+## Refatorações do diagnóstico `/entender` (pós-Fase 10)
+
+Uma por vez, cada uma com testes de caracterização escritos antes, revisão e aprovação humana (RNF-15). Nenhuma muda contrato de fila, API ou tabela.
+
+| Passo | Entrega | Estado |
+| --- | --- | --- |
+| 1 | Espera interrompível e backoff únicos (`application/timing.py`, `domain/backoff.py`); corrige o `OverflowError` do backoff após ~1 025 falhas seguidas | ✅ aprovada |
+| 2 | Contadores de alerta registrados com 0 na partida | ✅ na Fase 10 |
+| 3 | Dividir `application/ports.py` em pacote por contexto | pendente |
+| 4 | Extrair componentes de `_Session` (status, heartbeat, controle) | pendente |
+| 5 | Dividir `tests/fakes/memory.py` por port | pendente |
+| 6 | Composição comum dos processos assíncronos (`entrypoints/runtime.py`) | pendente |
+| 7 | Separar o painel em identidade, erros e rotas | pendente |
+
 ## Caminho crítico
 
 ```

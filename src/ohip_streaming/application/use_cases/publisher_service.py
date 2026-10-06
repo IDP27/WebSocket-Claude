@@ -28,8 +28,10 @@ from ohip_streaming.application.errors import (
     StoreUnavailableError,
 )
 from ohip_streaming.application.ports import Clock, MetricsSink, OutboxStore
+from ohip_streaming.application.timing import sleep_or_stop
 from ohip_streaming.application.use_cases.lease import LeaseKeeper
 from ohip_streaming.application.use_cases.publish_outbox import ChainPublishResult, PublishOutbox
+from ohip_streaming.domain.backoff import exponential_backoff
 from ohip_streaming.logging import get_logger
 
 log = get_logger(__name__)
@@ -149,8 +151,8 @@ class PublisherService:
     def _broker_backoff(self, error: BaseException) -> float:
         o = self._options
         self._broker_failures += 1
-        wait = min(
-            o.broker_backoff_max_s, o.broker_backoff_initial_s * 2 ** (self._broker_failures - 1)
+        wait = exponential_backoff(
+            self._broker_failures, o.broker_backoff_initial_s, o.broker_backoff_max_s
         )
         self._metrics.increment("ohip_broker_unavailable_total")
         log.warning("broker_indisponivel", wait_s=wait, error=str(error))
@@ -169,13 +171,4 @@ class PublisherService:
             self._metrics.increment("ohip_publisher_rounds_total")
 
     async def _sleep(self, seconds: float) -> None:
-        if seconds <= 0:
-            await asyncio.sleep(0)  # cede a vez entre rodadas
-            return
-        sleeper = asyncio.ensure_future(self._clock.sleep(seconds))
-        stopper = asyncio.ensure_future(self._stop.wait())
-        try:
-            await asyncio.wait({sleeper, stopper}, return_when=asyncio.FIRST_COMPLETED)
-        finally:
-            for task in (sleeper, stopper):
-                task.cancel()
+        await sleep_or_stop(seconds, self._stop, sleep=self._clock.sleep)  # 0: cede a vez

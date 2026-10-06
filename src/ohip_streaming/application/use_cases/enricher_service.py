@@ -21,7 +21,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import traceback
 from dataclasses import dataclass
 from enum import StrEnum
@@ -34,11 +33,13 @@ from ohip_streaming.application.errors import (
     StoreUnavailableError,
 )
 from ohip_streaming.application.ports import Clock, DlqStage, EnrichmentStore, MetricsSink
+from ohip_streaming.application.timing import sleep_or_stop
 from ohip_streaming.application.use_cases.enrich_event import (
     EnrichEvent,
     EnrichOutcome,
     InboundMessage,
 )
+from ohip_streaming.domain.backoff import exponential_backoff
 from ohip_streaming.logging import bind_context, get_logger
 
 log = get_logger(__name__)
@@ -212,9 +213,8 @@ class EnricherService:
     async def _transient(self, error: Exception) -> Disposition:
         o = self._options
         self._transient_failures += 1
-        wait = min(
-            o.transient_backoff_max_s,
-            o.transient_backoff_initial_s * 2 ** (self._transient_failures - 1),
+        wait = exponential_backoff(
+            self._transient_failures, o.transient_backoff_initial_s, o.transient_backoff_max_s
         )
         retry_after = getattr(error, "retry_after_s", None)
         if retry_after:
@@ -225,17 +225,7 @@ class EnricherService:
         return Disposition.REQUEUE
 
     async def _sleep(self, seconds: float) -> None:
-        if seconds <= 0 or self._stop.is_set():
-            return
-        sleeper = asyncio.ensure_future(self._clock.sleep(seconds))
-        stopper = asyncio.ensure_future(self._stop.wait())
-        try:
-            await asyncio.wait({sleeper, stopper}, return_when=asyncio.FIRST_COMPLETED)
-        finally:
-            for task in (sleeper, stopper):
-                task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await task
+        await sleep_or_stop(seconds, self._stop, sleep=self._clock.sleep)
 
 
 def _safe_text(error: Exception) -> str:

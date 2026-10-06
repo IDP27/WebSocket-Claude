@@ -6,6 +6,7 @@ from collections.abc import Collection, Sequence
 from datetime import datetime, timedelta
 from typing import Final
 
+from ohip_streaming.domain.backoff import exponential_backoff
 from ohip_streaming.domain.errors import (
     InvalidOffsetError,
     ReplayConfirmationError,
@@ -51,7 +52,7 @@ def publish_retry_delay_s(attempts: int) -> float:
 
     10, 20, 40, 80, 160, 300, 300... — com 10 tentativas soma cerca de 30 min (ADR-0002).
     """
-    return min(PUBLISH_RETRY_CAP_S, PUBLISH_RETRY_BASE_S * float(2 ** max(0, attempts - 1)))
+    return exponential_backoff(attempts, PUBLISH_RETRY_BASE_S, PUBLISH_RETRY_CAP_S)
 
 
 # ------------------------------------------------------------------ replay

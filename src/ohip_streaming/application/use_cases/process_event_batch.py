@@ -36,6 +36,7 @@ from ohip_streaming.application.ports import (
     ProcessingStatus,
     SeenCache,
 )
+from ohip_streaming.domain.backoff import exponential_backoff
 from ohip_streaming.domain.events import (
     Event,
     RejectedMessage,
@@ -218,7 +219,9 @@ class ProcessEventBatch:
                 if attempt >= retries:
                     last_error = exc
                     break
-                delay = min(self._options.retry_cap_s, self._options.retry_base_s * 2.0**attempt)
+                delay = exponential_backoff(
+                    attempt + 1, self._options.retry_base_s, self._options.retry_cap_s
+                )
                 attempt += 1
                 log.warning("lote_falhou_nova_tentativa", attempt=attempt, size=len(items))
                 await self._clock.sleep(delay)

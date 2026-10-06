@@ -51,6 +51,7 @@ from ohip_streaming.application.ports import (
     WsConnection,
     WsConnector,
 )
+from ohip_streaming.application.timing import sleep_or_stop
 from ohip_streaming.application.use_cases.lease import LeaseKeeper
 from ohip_streaming.application.use_cases.process_event_batch import (
     ConsumerContext,
@@ -330,11 +331,8 @@ class ChainConsumer:
             log.warning("status_indisponivel", exc_info=True)
 
     async def _sleep(self, seconds: float) -> None:
-        """Espera interrompível pelo pedido de parada."""
-        if seconds <= 0:
-            return
-        with contextlib.suppress(TimeoutError):
-            await asyncio.wait_for(self._stop.wait(), seconds)
+        """Espera interrompível pelo pedido de parada (tempo real do event loop)."""
+        await sleep_or_stop(seconds, self._stop)
 
 
 class _Session:
@@ -724,8 +722,7 @@ class _Session:
         if self.stop.is_set():
             await asyncio.sleep(seconds)
             return
-        with contextlib.suppress(TimeoutError):
-            await asyncio.wait_for(self.stop.wait(), seconds)
+        await sleep_or_stop(seconds, self.stop)
 
     def _closed_end(self, exc: ConnectionClosedError) -> SessionEnd:
         self.socket_closed = True

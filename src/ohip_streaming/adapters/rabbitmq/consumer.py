@@ -17,7 +17,7 @@ import contextlib
 import json
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
-from typing import Any, TypeVar
+from typing import Any
 
 import aio_pika
 from aio_pika.abc import AbstractIncomingMessage
@@ -25,12 +25,13 @@ from aio_pika.exceptions import AMQPError, ChannelInvalidStateError
 from aiormq.exceptions import ChannelAccessRefused, ChannelPreconditionFailed
 
 from ohip_streaming.application.errors import BrokerMisconfiguredError
+from ohip_streaming.application.timing import run_or_stop, sleep_or_stop
 from ohip_streaming.application.use_cases.enrich_event import InboundMessage
 from ohip_streaming.application.use_cases.enricher_service import Disposition
+from ohip_streaming.domain.backoff import exponential_backoff
 from ohip_streaming.logging import get_logger
 
 log = get_logger(__name__)
-T = TypeVar("T")
 
 Handler = Callable[[InboundMessage], Awaitable[Disposition]]
 Sleep = Callable[[float], Awaitable[None]]
@@ -81,9 +82,9 @@ class AioPikaQueueConsumer:
             except _BROKER_ERRORS as exc:
                 failures += 1
                 o = self.options
-                wait = min(o.backoff_max_s, o.backoff_initial_s * 2 ** (failures - 1))
+                wait = exponential_backoff(failures, o.backoff_initial_s, o.backoff_max_s)
                 log.warning("enricher_broker_indisponivel", wait_s=wait, error=type(exc).__name__)
-                await _wait(self.sleep(wait), stop)
+                await sleep_or_stop(wait, stop, sleep=self.sleep)
 
     async def _consume(self, handler: Handler, stop: asyncio.Event) -> None:
         o = self.options
@@ -99,7 +100,7 @@ class AioPikaQueueConsumer:
             log.info("enricher_consumindo", queue=o.queue, bindings=list(o.bindings))
             async with queue.iterator() as messages:
                 while not stop.is_set():
-                    message = await _wait(_next(messages), stop)
+                    message = await run_or_stop(_next(messages), stop, ignore=_BROKER_ERRORS)
                     if message is None:
                         return  # parada pedida
                     await self._dispatch(message, handler)
@@ -132,22 +133,6 @@ async def _next(messages: Any) -> AbstractIncomingMessage:
     except StopAsyncIteration:
         raise ChannelInvalidStateError("fila fechada pelo broker") from None
     return message
-
-
-async def _wait(work: Awaitable[T], stop: asyncio.Event) -> T | None:
-    """Espera ``work`` ou a parada; na parada, cancela ``work`` e devolve ``None``."""
-    task = asyncio.ensure_future(work)
-    stopper = asyncio.ensure_future(stop.wait())
-    try:
-        await asyncio.wait({task, stopper}, return_when=asyncio.FIRST_COMPLETED)
-    finally:
-        stopper.cancel()
-    if task.done():
-        return task.result()
-    task.cancel()
-    with contextlib.suppress(asyncio.CancelledError, *_BROKER_ERRORS):
-        await task
-    return None
 
 
 def bindings_from(keys: Sequence[str]) -> tuple[str, ...]:

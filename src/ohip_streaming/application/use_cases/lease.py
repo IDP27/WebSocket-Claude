@@ -21,6 +21,7 @@ from datetime import datetime, timedelta
 
 from ohip_streaming.application.errors import StoreUnavailableError
 from ohip_streaming.application.ports import Clock, LeaseStore, MetricsSink
+from ohip_streaming.application.timing import sleep_or_stop
 from ohip_streaming.logging import get_logger
 
 log = get_logger(__name__)
@@ -92,16 +93,7 @@ class LeaseKeeper:
         return None
 
     async def _sleep(self, seconds: float, stop: asyncio.Event | None) -> None:
-        if stop is None:
-            await self._clock.sleep(seconds)
-            return
-        sleeper = asyncio.ensure_future(self._clock.sleep(seconds))
-        stopper = asyncio.ensure_future(stop.wait())
-        try:
-            await asyncio.wait({sleeper, stopper}, return_when=asyncio.FIRST_COMPLETED)
-        finally:
-            for task in (sleeper, stopper):
-                task.cancel()
+        await sleep_or_stop(seconds, stop, sleep=self._clock.sleep)
 
     async def renew_once(self) -> bool:
         """Uma renovação. False quando o lease foi perdido."""
