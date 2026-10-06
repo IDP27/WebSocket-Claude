@@ -8,8 +8,6 @@ ação humana; reiniciar não resolve).
 from __future__ import annotations
 
 import asyncio
-import contextlib
-import signal
 from collections.abc import AsyncIterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
@@ -22,8 +20,6 @@ from ohip_streaming.adapters.rabbitmq.publisher import AioPikaPublisher
 from ohip_streaming.adapters.redis.client import open_redis
 from ohip_streaming.adapters.redis.metrics import (
     InMemoryMetrics,
-    RedisMetricsPublisher,
-    metrics_key,
 )
 from ohip_streaming.adapters.system import SystemClock
 from ohip_streaming.application.errors import BrokerMisconfiguredError
@@ -36,7 +32,6 @@ from ohip_streaming.application.use_cases.publisher_service import (
 from ohip_streaming.config import (
     AppSettings,
     LeaseSettings,
-    LogSettings,
     OracleSettings,
     PublisherSettings,
     RabbitMQSettings,
@@ -44,11 +39,11 @@ from ohip_streaming.config import (
     load_settings,
 )
 from ohip_streaming.entrypoints.common import AlertCounter, instance_id, preregister
-from ohip_streaming.logging import configure_logging, get_logger
+from ohip_streaming.entrypoints.runtime import metrics_snapshots, setup_logging, stop_on_signals
+from ohip_streaming.logging import get_logger
 
 log = get_logger(__name__)
 
-METRICS_INTERVAL_S = 15.0
 LEASE_NAME = "publisher"
 
 
@@ -130,17 +125,10 @@ async def compose(config: PublisherConfig) -> AsyncIterator[PublisherService]:
             metrics=metrics,
             options=loop_options(config),
         )
-        snapshots = RedisMetricsPublisher(
-            redis, metrics, key=metrics_key("publisher", instance), ttl_s=config.redis.metrics_ttl_s
-        )
-        task = asyncio.create_task(_publish_metrics(snapshots), name="metricas")
-        try:
+        async with metrics_snapshots(
+            redis, metrics, process="publisher", instance=instance, ttl_s=config.redis.metrics_ttl_s
+        ):
             yield service
-        finally:
-            task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await task
-            await snapshots.publish()  # último retrato (ex.: lease perdido logo antes de sair)
     finally:
         await broker.close()
         await redis.aclose()
@@ -153,30 +141,15 @@ def alert_counters() -> list[AlertCounter]:
     return [("ohip_lease_lost_total", {"lease": LEASE_NAME})]
 
 
-async def _publish_metrics(publisher: RedisMetricsPublisher) -> None:
-    while True:
-        await asyncio.sleep(METRICS_INTERVAL_S)
-        await publisher.publish()
-
-
 async def serve(config: PublisherConfig) -> None:
     async with compose(config) as service:
-        loop = asyncio.get_running_loop()
-        for sig in (signal.SIGTERM, signal.SIGINT):
-            loop.add_signal_handler(sig, service.request_stop)
+        stop_on_signals(service.request_stop)
         await service.run()
 
 
 def main() -> int:
     config = PublisherConfig.load()
-    logs = load_settings(LogSettings)
-    configure_logging(
-        service="ohip-publisher",
-        environment=config.app.environment.value,
-        code_version=config.app.code_version,
-        level=logs.level,
-        json_output=logs.json_output,
-    )
+    setup_logging("ohip-publisher", config.app)
     log.info("publisher_iniciando")
     try:
         asyncio.run(serve(config))

@@ -10,8 +10,6 @@ a fila. Fila com argumentos divergentes: alerta crítico e saída com código 2.
 from __future__ import annotations
 
 import asyncio
-import contextlib
-import signal
 from collections.abc import AsyncIterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
@@ -37,8 +35,6 @@ from ohip_streaming.adapters.redis.caches import (
 from ohip_streaming.adapters.redis.client import open_redis
 from ohip_streaming.adapters.redis.metrics import (
     InMemoryMetrics,
-    RedisMetricsPublisher,
-    metrics_key,
 )
 from ohip_streaming.adapters.system import SystemClock
 from ohip_streaming.application.errors import BrokerMisconfiguredError, ResourceRejectedError
@@ -52,7 +48,6 @@ from ohip_streaming.application.use_cases.token_provider import TokenProvider, t
 from ohip_streaming.config import (
     AppSettings,
     EnricherSettings,
-    LogSettings,
     OhipSettings,
     OracleSettings,
     RabbitMQSettings,
@@ -60,11 +55,10 @@ from ohip_streaming.config import (
     load_settings,
 )
 from ohip_streaming.entrypoints.common import AlertCounter, instance_id, preregister
-from ohip_streaming.logging import configure_logging, get_logger
+from ohip_streaming.entrypoints.runtime import metrics_snapshots, setup_logging, stop_on_signals
+from ohip_streaming.logging import get_logger
 
 log = get_logger(__name__)
-
-METRICS_INTERVAL_S = 15.0
 
 
 @dataclass(frozen=True)
@@ -185,17 +179,10 @@ async def compose(config: EnricherConfig) -> AsyncIterator[EnricherRuntime]:
         consumer = AioPikaQueueConsumer(
             url=config.rabbitmq.url.get_secret_value(), options=consumer_options(config)
         )
-        snapshots = RedisMetricsPublisher(
-            redis, metrics, key=metrics_key("enricher", instance), ttl_s=config.redis.metrics_ttl_s
-        )
-        task = asyncio.create_task(_publish_metrics(snapshots), name="metricas")
-        try:
+        async with metrics_snapshots(
+            redis, metrics, process="enricher", instance=instance, ttl_s=config.redis.metrics_ttl_s
+        ):
             yield EnricherRuntime(service, consumer)
-        finally:
-            task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await task
-            await snapshots.publish()  # último retrato antes de sair
     finally:
         if http is not None:
             await http.aclose()
@@ -214,17 +201,9 @@ def alert_counters() -> list[AlertCounter]:
     ]
 
 
-async def _publish_metrics(publisher: RedisMetricsPublisher) -> None:
-    while True:
-        await asyncio.sleep(METRICS_INTERVAL_S)
-        await publisher.publish()
-
-
 async def serve(config: EnricherConfig) -> None:
     async with compose(config) as runtime:
-        loop = asyncio.get_running_loop()
-        for sig in (signal.SIGTERM, signal.SIGINT):
-            loop.add_signal_handler(sig, runtime.service.request_stop)
+        stop_on_signals(runtime.service.request_stop)
         try:
             await runtime.consumer.run(runtime.service.handle, runtime.service.stop_event)
         except BrokerMisconfiguredError:
@@ -235,14 +214,7 @@ async def serve(config: EnricherConfig) -> None:
 
 def main() -> int:
     config = EnricherConfig.load()
-    logs = load_settings(LogSettings)
-    configure_logging(
-        service="ohip-enricher",
-        environment=config.app.environment.value,
-        code_version=config.app.code_version,
-        level=logs.level,
-        json_output=logs.json_output,
-    )
+    setup_logging("ohip-enricher", config.app)
     log.info("enricher_iniciando", rest_enabled=config.enricher.rest_enabled)
     try:
         asyncio.run(serve(config))

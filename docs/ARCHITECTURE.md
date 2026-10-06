@@ -302,7 +302,7 @@ entrypoints ──▶ application ──▶ domain
 - Fase 9 (ADR-0019, **sem regras até a Q-1**): `application/use_cases/enricher_service.py` (tentativas, DLQ e falhas de infraestrutura), `adapters/oracle/enrichment_store.py` (`MERGE` condicional e DLQ `NORMALIZE`/`ENRICH`), `adapters/ohip_rest/resources.py` (REST do OHIP com rate limit, cache e `Retry-After`), `adapters/rabbitmq/consumer.py` (fila `ohip.enricher`) e `entrypoints/enricher.py` (processo `ohip-enricher`).
 - Fase 10 (ADR-0020): status completo do consumer em `OHIP_CONSUMER_STATUS` (`record_subscribed`, `record_health`, `record_disconnect` com falhas, reconexões e próxima tentativa), expurgo (`application/use_cases/purge.py`, `adapters/oracle/purge_store.py`, `entrypoints/purge.py`), teste de carga (`tests/load/`) e deploy (`deploy/systemd/`, `deploy/nginx/`, `deploy/prometheus/`).
 - Apoio comum (refatoração 1 do `/entender`): `domain/backoff.py` (`exponential_backoff`, com teto no expoente) e `application/timing.py` (`sleep_or_stop`, `run_or_stop`): toda espera interrompível pela parada e todo backoff exponencial passam por eles.
-- `entrypoints/`: `consumer.py`, `publisher.py`, `enricher.py`, `purge.py`, `api/`, `admin/`.
+- `entrypoints/`: `consumer.py`, `publisher.py`, `enricher.py`, `purge.py`, `api/`, `admin/`; `common.py` (instância, contadores de alerta) e `runtime.py` (refatoração 6 do `/entender`: log, SIGTERM/SIGINT e snapshot de métricas comuns aos processos assíncronos).
 
 `import-linter` (ADR-0005): `domain`/`application` sem `oracledb`, `websockets`, `fastapi`, `flask`, `aio_pika`, `redis`, `httpx`; `entrypoints.admin` sem `adapters.oracle`, `adapters.redis`, `oracledb`, `redis`.
 

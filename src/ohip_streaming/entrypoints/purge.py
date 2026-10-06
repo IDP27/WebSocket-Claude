@@ -8,7 +8,6 @@ sai com sucesso (o resto fica para a próxima execução). Erro: código 1 (``On
 from __future__ import annotations
 
 import asyncio
-import signal
 from dataclasses import dataclass
 
 from ohip_streaming.adapters.oracle.database import PooledSession, open_pool
@@ -22,12 +21,12 @@ from ohip_streaming.application.use_cases.purge import (
 )
 from ohip_streaming.config import (
     AppSettings,
-    LogSettings,
     OracleSettings,
     PurgeSettings,
     load_settings,
 )
-from ohip_streaming.logging import configure_logging, get_logger
+from ohip_streaming.entrypoints.runtime import setup_logging, stop_on_signals
+from ohip_streaming.logging import get_logger
 
 log = get_logger(__name__)
 
@@ -59,9 +58,7 @@ def purge_options(settings: PurgeSettings) -> PurgeOptions:
 
 async def serve(config: PurgeConfig) -> list[PurgeResult]:
     stop = asyncio.Event()
-    loop = asyncio.get_running_loop()
-    for sig in (signal.SIGTERM, signal.SIGINT):
-        loop.add_signal_handler(sig, stop.set)
+    stop_on_signals(stop.set)
     pool = open_pool(config.oracle)
     try:
         session = PooledSession(pool, call_timeout_ms=config.purge.call_timeout_ms)
@@ -77,14 +74,7 @@ async def serve(config: PurgeConfig) -> list[PurgeResult]:
 
 def main() -> int:
     config = PurgeConfig.load()
-    logs = load_settings(LogSettings)
-    configure_logging(
-        service="ohip-purge",
-        environment=config.app.environment.value,
-        code_version=config.app.code_version,
-        level=logs.level,
-        json_output=logs.json_output,
-    )
+    setup_logging("ohip-purge", config.app)
     p = config.purge
     log.info(
         "expurgo_iniciando",

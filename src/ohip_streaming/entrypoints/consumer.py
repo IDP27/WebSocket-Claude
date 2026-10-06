@@ -11,8 +11,6 @@ compartilhado, dedup rápido, métricas), OAuth (httpx) e WebSocket (websockets)
 from __future__ import annotations
 
 import asyncio
-import contextlib
-import signal
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -31,8 +29,6 @@ from ohip_streaming.adapters.redis.caches import RedisSeenCache, RedisTokenCache
 from ohip_streaming.adapters.redis.client import open_redis
 from ohip_streaming.adapters.redis.metrics import (
     InMemoryMetrics,
-    RedisMetricsPublisher,
-    metrics_key,
 )
 from ohip_streaming.adapters.system import SystemClock
 from ohip_streaming.application.use_cases.consume_chain import (
@@ -52,7 +48,6 @@ from ohip_streaming.config import (
     AppSettings,
     ConsumerSettings,
     LeaseSettings,
-    LogSettings,
     OhipSettings,
     OracleSettings,
     RabbitMQSettings,
@@ -62,11 +57,11 @@ from ohip_streaming.config import (
 from ohip_streaming.domain.connection import ReconnectPolicy
 from ohip_streaming.domain.messages import ExchangeKind
 from ohip_streaming.entrypoints.common import AlertCounter, instance_id, preregister
-from ohip_streaming.logging import configure_logging, get_logger
+from ohip_streaming.entrypoints.runtime import metrics_snapshots, setup_logging, stop_on_signals
+from ohip_streaming.logging import get_logger
 
 log = get_logger(__name__)
 
-METRICS_INTERVAL_S = 15.0
 OAUTH_TIMEOUT_S = 10.0
 
 
@@ -203,20 +198,14 @@ async def compose(config: ConsumerConfig) -> AsyncIterator[ChainConsumer]:
             metrics=metrics,
             app_key=o.app_key.get_secret_value(),
         )
-        publisher = RedisMetricsPublisher(
+        async with metrics_snapshots(
             redis,
             metrics,
-            key=metrics_key(f"consumer-{o.chain_code}", instance),
+            process=f"consumer-{o.chain_code}",
+            instance=instance,
             ttl_s=config.redis.metrics_ttl_s,
-        )
-        snapshots = asyncio.create_task(_publish_metrics(publisher), name="metricas")
-        try:
+        ):
             yield ChainConsumer(deps, consumer_options(config, instance))
-        finally:
-            snapshots.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await snapshots
-            await publisher.publish()  # último retrato (ex.: lease perdido logo antes de sair)
     finally:
         writer.close()
         await http.aclose()
@@ -224,30 +213,15 @@ async def compose(config: ConsumerConfig) -> AsyncIterator[ChainConsumer]:
         pool.close(force=True)
 
 
-async def _publish_metrics(publisher: RedisMetricsPublisher) -> None:
-    while True:
-        await asyncio.sleep(METRICS_INTERVAL_S)
-        await publisher.publish()
-
-
 async def serve(config: ConsumerConfig) -> None:
     async with compose(config) as consumer:
-        loop = asyncio.get_running_loop()
-        for sig in (signal.SIGTERM, signal.SIGINT):
-            loop.add_signal_handler(sig, consumer.request_stop)
+        stop_on_signals(consumer.request_stop)
         await consumer.run()
 
 
 def main() -> int:
     config = ConsumerConfig.load()
-    logs = load_settings(LogSettings)
-    configure_logging(
-        service="ohip-consumer",
-        environment=config.app.environment.value,
-        code_version=config.app.code_version,
-        level=logs.level,
-        json_output=logs.json_output,
-    )
+    setup_logging("ohip-consumer", config.app)
     log.info("consumer_iniciando", chain_code=config.ohip.chain_code)
     try:
         asyncio.run(serve(config))
