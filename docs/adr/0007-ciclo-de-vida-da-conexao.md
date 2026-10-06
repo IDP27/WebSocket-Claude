@@ -1,6 +1,6 @@
 # ADR-0007 — Ciclo de vida da conexão, heartbeat e tratamento de fechamentos
 
-- Status: Aceito (aprovado em 2026-10-01 com a Fase 0)
+- Status: Aceito (aprovado em 2026-10-01 com a Fase 0; nota de alinhamento em 2026-10-06)
 - Data: 2026-10-01
 
 ## Contexto
@@ -32,7 +32,7 @@ O guia Oracle detalha regras que o PRD resume: `pong` pode ser adiado durante ra
 | 4403 | `STOPPED` + alerta crítico. Exige ação humana no Developer Portal. |
 | 4406 | `STOPPED` + alerta: bug no handshake (subprotocolo). |
 | 4408 | Reconecta com backoff; repetido → alerta (init lento). |
-| 4409 | Espera 120 s + jitter (0–30 s); alerta se persistir por mais de `LOCK_ALERT_AFTER` (padrão 10 min). |
+| 4409 | Espera 120 s + jitter (0–30 s); alerta se se repetir: 3 ou mais 4409 em 30 min (`OhipLockout4409Repetido`, ADR-0020 §6). |
 | 4504 | Espera 15 s e reconecta preservando o offset. |
 | Rede/timeout/outros | Backoff exponencial com jitter, **começando em 10 s** e com teto de 60 s (fica abaixo do limite de 12 req/min, D-5). |
 | Mensagem acima de `WS_MAX_MESSAGE_BYTES` (padrão 16 MiB) | Reconecta. Se repetir `OVERSIZE_MAX_REPEATS` vezes (padrão 3) no mesmo offset → `STOPPED` + alerta crítico (evita laço infinito). |
@@ -50,3 +50,7 @@ O guia Oracle detalha regras que o PRD resume: `pong` pode ser adiado durante ra
 
 - Mais estados do que o PRD descreve, todos cobertos por testes contra o servidor simulado (Fase 5).
 - O servidor simulado precisa reproduzir: rajadas com `pong` atrasado, fechamento só pelo servidor, 4401/4403/4406/4408/4409/4504, mensagem grande demais, reconexão em menos de 10 s (deve gerar 4409).
+
+## Nota de alinhamento (2026-10-06)
+
+A primeira versão previa um alerta de 4409 por tempo: `LOCK_ALERT_AFTER` (padrão 10 min) de lockout contínuo. Essa variável nunca foi criada. A Fase 10 implementou o alerta por contagem, na ferramenta de alertas e não no consumer: `increase(ohip_ws_reconnects_total{code="4409"}[30m]) >= 3` (`deploy/prometheus/ohip-alerts.yml`). Cada 4409 custa de 120 a 150 s de espera; o 3º chega depois de cerca de 4 a 5 min sem consumir (as duas esperas anteriores), mais o atraso do snapshot e da coleta. O alerta sai, portanto, antes dos 10 min previstos, na mesma ordem de grandeza. A regra fica fora do consumer: o limite muda sem novo deploy e vale para qualquer instância (Q-6). A tabela acima foi corrigida; o comportamento do consumer diante do 4409 não muda.

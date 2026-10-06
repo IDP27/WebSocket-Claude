@@ -154,7 +154,7 @@ echo -n "$OHIP_APP_KEY" | sha256sum | cut -d' ' -f1   # hex minúsculo
 | 4401 | Automático (novo token). Se repetir: conferir credenciais e hash da app key. |
 | 4403 | **Ação humana**: conferir chain, habilitação de streaming e aprovação dos eventos no Developer Portal. Depois `systemctl restart ohip-consumer@<chain>`. |
 | 4406 | Bug no handshake (subprotocolo). Abrir incidente para o time. |
-| 4409 | Automático (espera 2 min). Se persistir: procurar outro cliente usando a mesma app key (Postman, n8n, outra VM). |
+| 4409 | Automático (espera 2 min). Três ou mais em 30 min disparam `OhipLockout4409Repetido`. Se persistir: procurar outro cliente usando a mesma app key (Postman, n8n, outra VM). |
 | 4504 | Automático (15 s). Se persistir: status da Oracle. |
 
 ## Cuidados
