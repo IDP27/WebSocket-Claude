@@ -39,7 +39,7 @@ groups:
         annotations:
           summary: "Chain {{ $labels.chain_code }}: {{ $value }} falhas de conexão seguidas"
       - alert: OhipLockout4409Repetido
-        expr: increase(ohip_ws_reconnects_total{code="4409"}[30m]) >= 3
+        expr: increase(ohip_ws_reconnects_total{code="4409"}[30m]) >= 3  # AJUSTAR: o 3º chega após ~4-5 min sem consumir (ADR-0007)
         labels: {severity: warning}
         annotations:
           summary: "4409 repetido: outra conexão com a mesma app key ou reconexão rápida demais"
