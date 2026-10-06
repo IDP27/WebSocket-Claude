@@ -25,7 +25,7 @@ import random
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime, tzinfo
+from datetime import tzinfo
 from enum import StrEnum
 from typing import Any
 
@@ -36,7 +36,6 @@ from ohip_streaming.application.errors import (
     HandshakeRejectedError,
     LeaseLostError,
     MessageTooLargeError,
-    StoreOperationError,
     StoreUnavailableError,
     UnknownChainError,
 )
@@ -44,7 +43,6 @@ from ohip_streaming.application.intake import IntakeItem, IntakeQueue
 from ohip_streaming.application.ports import (
     AccessToken,
     Clock,
-    ConnectionHealth,
     ConsumerStatusStore,
     MetricsSink,
     ReplayStore,
@@ -52,6 +50,12 @@ from ohip_streaming.application.ports import (
     WsConnector,
 )
 from ohip_streaming.application.timing import sleep_or_stop
+from ohip_streaming.application.use_cases.consumer_session import (
+    ControlLoop,
+    DrainCause,
+    Liveness,
+    StatusReporter,
+)
 from ohip_streaming.application.use_cases.lease import LeaseKeeper
 from ohip_streaming.application.use_cases.process_event_batch import (
     ConsumerContext,
@@ -69,7 +73,6 @@ from ohip_streaming.domain.connection import (
     CloseDecision,
     ConsumerState,
     ReconnectPolicy,
-    RttEstimator,
     decide_on_close,
     decide_on_oversize,
     wait_before_connect,
@@ -121,15 +124,6 @@ class EndReason(StrEnum):
     AUTH_REJECTED = "AUTH_REJECTED"  # OAuth recusou as credenciais
     UNAVAILABLE = "UNAVAILABLE"  # OAuth ou banco fora antes de assinar
     INTERNAL_ERROR = "INTERNAL_ERROR"  # tarefa da sessão falhou com erro inesperado
-
-
-class DrainCause(StrEnum):
-    STOP = "STOP"
-    TOKEN = "TOKEN"  # noqa: S105 - motivo, não segredo
-    REPLAY = "REPLAY"
-    POISONED = "POISONED"
-    LEASE_LOST = "LEASE_LOST"
-    SUBSCRIPTION_ENDED = "SUBSCRIPTION_ENDED"  # error/complete do servidor (D-10)
 
 
 @dataclass(slots=True)
@@ -336,7 +330,8 @@ class ChainConsumer:
 
 
 class _Session:
-    """Uma conexão WebSocket, do connect ao fechamento."""
+    """Uma conexão WebSocket, do connect ao fechamento: protocolo, leitura, gravação e
+    drenagem. Status, prova de vida e controle ficam em ``consumer_session``."""
 
     def __init__(
         self, deps: ConsumerDeps, options: ConsumerOptions, epoch: int, stop: asyncio.Event
@@ -352,10 +347,22 @@ class _Session:
             max_items=options.intake_max_items, max_bytes=options.intake_max_bytes
         )
         self.conn: WsConnection | None = None
-        self.rtt = RttEstimator()
         self.loop = asyncio.get_running_loop()
-        self.last_alive = self.loop.time()
-        self.ping_sent_at: float | None = None
+        self.liveness = liveness = Liveness(
+            now=self.loop.time,
+            ping_interval_s=options.ping_interval_s,
+            pong_timeout_min_s=options.pong_timeout_min_s,
+            rng=deps.rng,
+        )
+        self.status = StatusReporter(
+            deps.status,
+            chain_code=options.chain_code,
+            instance_id=options.instance_id,
+            lease=deps.lease,
+            interval_s=options.status_interval_s,
+            now=self.loop.time,
+            rtt_s=lambda: liveness.rtt_s,  # sem capturar a sessão (sem ciclo de referências)
+        )
         self.subscribed_at: float | None = None
         self.events_received = 0
         self.poisoned = False
@@ -367,14 +374,6 @@ class _Session:
         self.offset: Offset | None = None
         self.token: AccessToken | None = None  # token usado no connection_init
         self.background: set[asyncio.Task[None]] = set()
-        # Saúde para OHIP_CONSUMER_STATUS (relógio do processo, UTC; ADR-0020 §1).
-        self.last_message_wall: datetime | None = None
-        self.last_ping_wall: datetime | None = None
-        self.last_pong_wall: datetime | None = None
-        self.health_written: ConnectionHealth | None = None
-        # A barreira de epoch ou o lease acusou outra dona: daqui em diante, nada de status.
-        self.lease_gone = False
-        self.health_due = self.loop.time() + options.status_interval_s
 
     @property
     def ws(self) -> WsConnection:
@@ -404,7 +403,7 @@ class _Session:
                     with contextlib.suppress(Exception):
                         await self.conn.close()
                 # Depois de fechar: um Oracle lento não atrasa o fechamento do socket.
-                await self._write_health()
+                await self.status.health()
             end = self.end or SessionEnd(EndReason.SERVER_CLOSED, detail="fim sem motivo")
             end.healthy = self._healthy()
             end.offset = self.offset
@@ -415,7 +414,7 @@ class _Session:
         """True quando assinou; False quando a sessão já terminou (``self.end``)."""
         d, o = self.d, self.o
         token = self.token = await d.tokens.get()
-        await self._record(ConsumerState.CONNECTING)
+        await self.status.state(ConsumerState.CONNECTING)
         try:
             self.conn = await d.connector.connect()
         except HandshakeRejectedError as exc:
@@ -423,13 +422,13 @@ class _Session:
             self._finish(SessionEnd(EndReason.HANDSHAKE_REJECTED, detail=str(exc)))
             return False
         await self.ws.send(protocol.connection_init(token.value, d.app_key))
-        await self._record(ConsumerState.INIT_SENT)
+        await self.status.state(ConsumerState.INIT_SENT)
         if await self._wait_frame(protocol.FrameType.CONNECTION_ACK, None, o.ack_timeout_s) is None:
             self._finish(SessionEnd(EndReason.ACK_TIMEOUT, detail="sem connection_ack"))
             return False
 
         if o.status_check_enabled:
-            await self._record(ConsumerState.STATUS_CHECK)
+            await self.status.state(ConsumerState.STATUS_CHECK)
             status = await self._status_check()
             if status not in (None, "Inactive"):
                 log.warning("ohip_conexao_ativa", status=status)
@@ -446,28 +445,35 @@ class _Session:
                 delta=o.delta,
             )
         )
-        self.subscribed_at = self.last_alive = self.loop.time()
+        self.subscribed_at = self.loop.time()
+        self.liveness.alive()
         log.info(  # dados pedidos pelo suporte Oracle (ADR-0007)
             "ohip_assinado",
             offset=self.offset.value if self.offset else None,
             hotel_codes=list(o.hotel_codes),
             instance_id=o.instance_id,
         )
-        if self._owns_status():
-            try:
-                await d.status.record_subscribed(
-                    o.chain_code, o.instance_id, self.subscription_id, token.expires_at
-                )
-            except StoreUnavailableError:
-                log.warning("status_indisponivel")
+        await self.status.subscribed(self.subscription_id, token.expires_at)
         return True
 
     async def _serve(self) -> None:
+        control = ControlLoop(
+            self,
+            stop=self.stop,
+            lease=self.d.lease,
+            tokens=self.d.tokens,
+            replay_store=self.d.replay_store,
+            retry_dlq=self.d.retry_dlq,
+            context=self.context,
+            status=self.status,
+            poll_interval_s=self.o.control_poll_interval_s,
+            dlq_retry_limit=self.o.dlq_retry_limit,
+        )
         reader = asyncio.create_task(self._reader(), name="ws-leitura")
         writer = asyncio.create_task(self._writer(), name="ws-gravacao")
         helpers = [
             asyncio.create_task(self._heartbeat(), name="ws-heartbeat"),
-            asyncio.create_task(self._control(), name="ws-controle"),
+            asyncio.create_task(control.run(), name="ws-controle"),
         ]
         closed = asyncio.ensure_future(self.closed.wait())
         try:
@@ -503,7 +509,7 @@ class _Session:
         error = task.exception() if not task.cancelled() else None
         name = task.get_name() if isinstance(task, asyncio.Task) else "tarefa"
         log.error("tarefa_da_sessao_terminou", task=name, exc_info=error)
-        await self._poison(f"{name} terminou: {type(error).__name__}")
+        await self.poison(f"{name} terminou: {type(error).__name__}")
         self._finish(SessionEnd(EndReason.INTERNAL_ERROR, detail=f"{name}: {error!r}"))
 
     # ------------------------------------------------------------------ tarefas
@@ -516,12 +522,12 @@ class _Session:
         except ConnectionClosedError as exc:
             self._finish(self._closed_end(exc))
         except TimeoutError:  # put esperou mais que INTAKE_STALL_TIMEOUT
-            await self._poison("fila interna travada além do prazo")
-            await self._drain(DrainCause.POISONED)
+            await self.poison("fila interna travada além do prazo")
+            await self.drain(DrainCause.POISONED)
             await self._read_until_closed()
         except Exception as exc:
             log.error("leitura_falhou", exc_info=True)
-            await self._poison(f"leitura: {type(exc).__name__}")
+            await self.poison(f"leitura: {type(exc).__name__}")
             self._finish(SessionEnd(EndReason.INTERNAL_ERROR, detail=f"leitura: {exc!r}"))
 
     async def _read_until_closed(self) -> None:
@@ -536,9 +542,9 @@ class _Session:
     async def _on_frame(self, frame: protocol.Frame, raw: str) -> None:
         kind = frame.type
         if kind is protocol.FrameType.NEXT and frame.id == self.subscription_id:
-            self.last_alive = self.loop.time()  # next conta como prova de vida
+            self.liveness.alive()  # next conta como prova de vida
             self.events_received += 1
-            received_at = self.last_message_wall = self.d.clock.now()
+            received_at = self.status.last_message_at = self.d.clock.now()
             if self.poisoned:
                 return  # nada desta conexão é gravado depois de envenenada
             item = IntakeItem(raw, received_at, len(raw))
@@ -546,11 +552,8 @@ class _Session:
         elif kind is protocol.FrameType.PING:
             await self.ws.send(protocol.PONG)
         elif kind is protocol.FrameType.PONG:
-            self.last_alive = self.loop.time()
-            self.last_pong_wall = self.d.clock.now()
-            if self.ping_sent_at is not None:
-                self.rtt.update(self.loop.time() - self.ping_sent_at)
-                self.ping_sent_at = None
+            self.liveness.pong()
+            self.status.last_pong_at = self.d.clock.now()
         elif (
             kind in (protocol.FrameType.ERROR, protocol.FrameType.COMPLETE)
             and frame.id == self.subscription_id
@@ -562,7 +565,7 @@ class _Session:
                 type=kind.value,
                 errors=protocol.error_messages(frame.payload),
             )
-            await self._drain(DrainCause.SUBSCRIPTION_ENDED)
+            await self.drain(DrainCause.SUBSCRIPTION_ENDED)
         else:
             self.d.metrics.increment("ohip_ws_frames_ignored_total", type=kind.value)
             log.warning("ws_frame_ignorado", type=kind.value)
@@ -578,98 +581,40 @@ class _Session:
             try:
                 await self.d.batch.execute(self.context, messages)
             except StoreUnavailableError:
-                await self._poison("banco indisponível")
-                await self._drain(DrainCause.POISONED)
+                await self.poison("banco indisponível")
+                await self.drain(DrainCause.POISONED)
             except (LeaseLostError, UnknownChainError) as exc:
-                self.lease_gone = True
-                await self._poison(f"{type(exc).__name__}: {exc}")
-                await self._drain(DrainCause.LEASE_LOST)
+                self.status.lose_lease()
+                await self.poison(f"{type(exc).__name__}: {exc}")
+                await self.drain(DrainCause.LEASE_LOST)
             except Exception as exc:  # nunca morrer em silêncio (a fila encheria por horas)
                 log.error("gravacao_falhou", exc_info=True)
-                await self._poison(f"gravação: {type(exc).__name__}")
-                await self._drain(DrainCause.POISONED)
+                await self.poison(f"gravação: {type(exc).__name__}")
+                await self.drain(DrainCause.POISONED)
 
     async def _heartbeat(self) -> None:
         try:
-            await self._heartbeat_loop()
+            if await self.liveness.run(self._send_ping, self.closed):
+                self._finish(SessionEnd(EndReason.LIVENESS_TIMEOUT, detail="sem pong nem next"))
         except Exception as exc:
             log.error("heartbeat_falhou", exc_info=True)
             self._finish(SessionEnd(EndReason.INTERNAL_ERROR, detail=f"heartbeat: {exc!r}"))
 
-    async def _heartbeat_loop(self) -> None:
-        while not self.closed.is_set():
-            await asyncio.sleep(self.o.ping_interval_s)
-            silence = self.loop.time() - self.last_alive
-            limit = self.rtt.liveness_timeout_s(
-                min_timeout_s=self.o.pong_timeout_min_s, jitter_s=self.d.rng() * 5
-            )
-            if silence > limit:
-                log.error("ohip_sem_prova_de_vida", silence_s=round(silence, 1))
-                self._finish(SessionEnd(EndReason.LIVENESS_TIMEOUT, detail="sem pong nem next"))
-                return
-            if self.ping_sent_at is None:
-                self.ping_sent_at = self.loop.time()
-            with contextlib.suppress(ConnectionClosedError):
-                await self.ws.send(protocol.PING)
-                self.last_ping_wall = self.d.clock.now()
+    async def _send_ping(self) -> None:
+        with contextlib.suppress(ConnectionClosedError):
+            await self.ws.send(protocol.PING)
+            self.status.last_ping_at = self.d.clock.now()
 
-    async def _control(self) -> None:
-        while not self.closed.is_set():
-            await self._wait_stop(self.o.control_poll_interval_s)
-            if self.completed or self.closed.is_set():
-                continue
-            try:
-                await self._control_step()
-            except Exception:  # o controle nunca morre em silêncio
-                log.error("controle_falhou", exc_info=True)
-            if self.loop.time() >= self.health_due:
-                self.health_due = self.loop.time() + self.o.status_interval_s
-                await self._write_health()
+    # ------------------------------------------------------------------ ações (ControlLoop)
 
-    async def _control_step(self) -> None:
-        if self.stop.is_set():
-            await self._drain(DrainCause.STOP)
-        elif self.d.lease.lost:
-            self.lease_gone = True
-            await self._poison("lease perdido")
-            await self._drain(DrainCause.LEASE_LOST)
-        elif await self._token_due():
-            await self._drain(DrainCause.TOKEN)
-        elif await self._replay_pending():
-            await self._drain(DrainCause.REPLAY)
-        elif not self.poisoned:
-            await self._retry_dlq()
-
-    # ------------------------------------------------------------------ apoio
-
-    async def _token_due(self) -> bool:
-        """O token desta conexão entrou na margem: renovar exige reconectar (ADR-0007)."""
-        return self.token is not None and self.d.tokens.refresh_due(self.token)
-
-    async def _replay_pending(self) -> bool:
-        try:
-            return await self.d.replay_store.pending_request(self.o.chain_code) is not None
-        except StoreUnavailableError:
-            return False
-
-    async def _retry_dlq(self) -> None:
-        try:
-            await self.d.retry_dlq.execute(self.context, limit=self.o.dlq_retry_limit)
-        except StoreUnavailableError:
-            log.warning("retry_dlq_sem_banco")
-        except LeaseLostError:
-            self.lease_gone = True
-            await self._poison("lease perdido")
-            await self._drain(DrainCause.LEASE_LOST)
-
-    async def _drain(self, cause: DrainCause) -> None:
+    async def drain(self, cause: DrainCause) -> None:
         """``complete`` e espera o servidor fechar (só fecha do lado do cliente no prazo)."""
         if self.completed or self.conn is None:
             return
         self.completed = True
         self.drain_cause = cause
         log.info("ohip_complete", cause=cause.value)
-        await self._record(ConsumerState.DRAINING)
+        await self.status.state(ConsumerState.DRAINING)
         with contextlib.suppress(ConnectionClosedError):
             await self.ws.send(protocol.complete(self.subscription_id))
         task = asyncio.create_task(self._drain_deadline(), name="ws-prazo-drenagem")
@@ -683,13 +628,15 @@ class _Session:
         log.warning("ohip_nao_fechou_no_prazo", timeout_s=self.o.drain_timeout_s)
         self._finish(SessionEnd(EndReason.DRAINED, detail="prazo de drenagem vencido"))
 
-    async def _poison(self, why: str) -> None:
+    async def poison(self, why: str) -> None:
         if self.poisoned:
             return
         self.poisoned = True
         dropped = await self.intake.discard()
         self.d.metrics.increment("ohip_connection_poisoned_total", chain_code=self.o.chain_code)
         log.error("conexao_envenenada", reason=why, descartadas=dropped)
+
+    # ------------------------------------------------------------------ apoio
 
     async def _status_check(self) -> str | None:
         query_id = str(uuid.uuid4())
@@ -716,14 +663,6 @@ class _Session:
                 return frame
         return None
 
-    async def _wait_stop(self, seconds: float) -> None:
-        """Espera o intervalo ou o pedido de parada. Já parado: espera o intervalo inteiro
-        (``Event.wait`` de um evento marcado não suspende e travaria o laço)."""
-        if self.stop.is_set():
-            await asyncio.sleep(seconds)
-            return
-        await sleep_or_stop(seconds, self.stop)
-
     def _closed_end(self, exc: ConnectionClosedError) -> SessionEnd:
         self.socket_closed = True
         if isinstance(exc, MessageTooLargeError) or exc.close_code == CLIENT_TOO_LARGE:
@@ -743,39 +682,6 @@ class _Session:
         if self.subscribed_at is None:
             return False
         return self.loop.time() - self.subscribed_at >= self.o.healthy_after_s
-
-    async def _write_health(self) -> None:
-        """Pela tarefa de controle (ou no fim): nunca pela leitura nem pelo heartbeat, para
-        uma escrita lenta não atrasar ``pong`` nem frames. Falha só gera aviso."""
-        srtt = self.rtt.srtt_s
-        health = ConnectionHealth(
-            last_message_at=self.last_message_wall,
-            last_ping_at=self.last_ping_wall,
-            last_pong_at=self.last_pong_wall,
-            rtt_ms=None if srtt is None else round(srtt * 1000),
-        )
-        if health == self.health_written or health == ConnectionHealth():
-            return  # nada novo desde a última gravação
-        if not self._owns_status():
-            return
-        try:
-            await self.d.status.record_health(self.o.chain_code, health)
-        except (StoreUnavailableError, StoreOperationError, UnknownChainError):
-            log.warning("status_indisponivel", exc_info=True)
-            return
-        self.health_written = health
-
-    def _owns_status(self) -> bool:
-        """Sem lease, nada é gravado na linha da chain: ela é da nova dona (ADR-0008)."""
-        return not (self.lease_gone or self.d.lease.lost)
-
-    async def _record(self, state: ConsumerState) -> None:
-        if not self._owns_status():
-            return
-        try:
-            await self.d.status.record_state(self.o.chain_code, state, self.o.instance_id)
-        except StoreUnavailableError:
-            log.warning("status_indisponivel")
 
 
 def _payload(raw: str) -> object:
