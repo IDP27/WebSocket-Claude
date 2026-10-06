@@ -29,7 +29,7 @@ Uma por vez, cada uma com testes de caracterização escritos antes, revisão e 
 | 4 | Extrair componentes de `_Session` (`consumer_session.py`: `StatusReporter`, `Liveness`, `ControlLoop`) | ✅ aprovada |
 | 5 | Dividir `tests/fakes/memory.py` por port (`tests/fakes/memory/`: `MemoryState` + uma classe por port compondo o `InMemoryDatabase`) | ✅ aprovada |
 | 6 | Composição comum dos processos assíncronos (`entrypoints/runtime.py`: `setup_logging`, `stop_on_signals`, `metrics_snapshots`) | ✅ aprovada |
-| 7 | Separar o painel em identidade, erros e rotas | pendente |
+| 7 | Separar o painel em identidade, erros e rotas (`admin/identity.py`, `errors.py`, `templating.py`, `views.py`, `context.py`) | ✅ aprovada |
 
 ## Caminho crítico
 
