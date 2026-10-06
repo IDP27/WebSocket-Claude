@@ -27,7 +27,7 @@ Uma por vez, cada uma com testes de caracterização escritos antes, revisão e 
 | 2 | Contadores de alerta registrados com 0 na partida | ✅ na Fase 10 |
 | 3 | Dividir `application/ports.py` em pacote por contexto (`application/ports/`, contratos `ports-por-contexto` e `monitoring-so-le-replay`) | ✅ aprovada |
 | 4 | Extrair componentes de `_Session` (`consumer_session.py`: `StatusReporter`, `Liveness`, `ControlLoop`) | ✅ aprovada |
-| 5 | Dividir `tests/fakes/memory.py` por port | pendente |
+| 5 | Dividir `tests/fakes/memory.py` por port (`tests/fakes/memory/`: `MemoryState` + uma classe por port compondo o `InMemoryDatabase`) | ✅ aprovada |
 | 6 | Composição comum dos processos assíncronos (`entrypoints/runtime.py`) | pendente |
 | 7 | Separar o painel em identidade, erros e rotas | pendente |
 
