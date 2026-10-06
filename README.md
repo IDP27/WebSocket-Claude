@@ -2,7 +2,7 @@
 
 Consumidor de eventos do OPERA Cloud pela **OHIP Streaming API** (WebSocket + GraphQL). Grava cada evento no Oracle 11g sem perda nem duplicidade e publica no RabbitMQ via outbox para BI, integrações e n8n.
 
-> **Status: Fases 0 a 10 concluídas** (a Fase 10 trouxe status completo do consumer, expurgo, teste de carga, systemd, Nginx e alertas; ADR-0020). Próximos passos: regras do enricher após a Q-1 e refatorações do diagnóstico `/entender`, uma por vez. Pendentes: respostas da Q-1/Q-2 (regras do enricher), Oracle 11g de teste (Q-17), sandbox OHIP e RabbitMQ de teste. Veja [docs/PLAN.md](docs/PLAN.md).
+> **Status: Fases 0 a 10 concluídas** (a Fase 10 trouxe status completo do consumer, expurgo, teste de carga, systemd, Nginx e alertas; ADR-0020). Refatorações do diagnóstico `/entender` concluídas (passos 1 e 3 a 7: esperas e backoff únicos, ports e fakes por contexto, sessão do consumer, montagem comum dos processos e painel em módulos). Próximo passo: regras do enricher após a Q-1. Pendentes: respostas da Q-1/Q-2 (regras do enricher), Oracle 11g de teste (Q-17), sandbox OHIP e RabbitMQ de teste. Veja [docs/PLAN.md](docs/PLAN.md).
 >
 > **Processos**: `ohip-consumer` (WebSocket OHIP → Oracle), `ohip-publisher` (outbox → RabbitMQ), `ohip-enricher` (fila → normalização no Oracle; sem regras até a Q-1, [ADR-0019](docs/adr/0019-enricher.md)), `ohip-purge` (expurgo diário por retenção), `ohip-api` (API de controle, [docs/API.md](docs/API.md)) e `ohip-admin` (painel em `/admin`, [docs/UI.md](docs/UI.md)), scripts do `pyproject.toml`.
 >
