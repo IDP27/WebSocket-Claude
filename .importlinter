@@ -66,3 +66,25 @@ type = independence
 modules =
     ohip_streaming.entrypoints.api
     ohip_streaming.entrypoints.admin
+
+[importlinter:contract:ports-por-contexto]
+name = Ports por contexto: só common é compartilhado; monitoring lê replay (refatoração 3)
+type = layers
+layers =
+    ohip_streaming.application.ports.monitoring
+    ohip_streaming.application.ports.consumer | ohip_streaming.application.ports.auth | ohip_streaming.application.ports.lease | ohip_streaming.application.ports.publisher | ohip_streaming.application.ports.replay | ohip_streaming.application.ports.operations | ohip_streaming.application.ports.enricher | ohip_streaming.application.ports.purge
+    ohip_streaming.application.ports.common
+
+[importlinter:contract:monitoring-so-le-replay]
+name = Ports: monitoring só lê common e replay (refatoração 3)
+type = forbidden
+source_modules =
+    ohip_streaming.application.ports.monitoring
+forbidden_modules =
+    ohip_streaming.application.ports.consumer
+    ohip_streaming.application.ports.auth
+    ohip_streaming.application.ports.lease
+    ohip_streaming.application.ports.publisher
+    ohip_streaming.application.ports.operations
+    ohip_streaming.application.ports.enricher
+    ohip_streaming.application.ports.purge

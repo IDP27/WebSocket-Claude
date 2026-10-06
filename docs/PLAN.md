@@ -25,7 +25,7 @@ Uma por vez, cada uma com testes de caracterização escritos antes, revisão e 
 | --- | --- | --- |
 | 1 | Espera interrompível e backoff únicos (`application/timing.py`, `domain/backoff.py`); corrige o `OverflowError` do backoff após ~1 025 falhas seguidas | ✅ aprovada |
 | 2 | Contadores de alerta registrados com 0 na partida | ✅ na Fase 10 |
-| 3 | Dividir `application/ports.py` em pacote por contexto | pendente |
+| 3 | Dividir `application/ports.py` em pacote por contexto (`application/ports/`, contratos `ports-por-contexto` e `monitoring-so-le-replay`) | ✅ aprovada |
 | 4 | Extrair componentes de `_Session` (status, heartbeat, controle) | pendente |
 | 5 | Dividir `tests/fakes/memory.py` por port | pendente |
 | 6 | Composição comum dos processos assíncronos (`entrypoints/runtime.py`) | pendente |

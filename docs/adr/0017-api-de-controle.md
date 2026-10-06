@@ -14,7 +14,7 @@ O contrato da API foi aprovado na Fase 0 (docs/API.md). Os casos de uso de escri
    - os stores da API usam `InlineSession` (`adapters/oracle/database.py`): o `run` chama `PooledSession.call` no próprio thread, sem executor;
    - o Oracle nunca é chamado do event loop do Uvicorn, e os casos de uso já testados são reaproveitados sem cópia síncrona;
    - nada preso a um event loop é compartilhado entre requisições: o Redis da API usa o cliente síncrono do mesmo pacote `redis`.
-2. **Consultas** pelo port `MonitoringStore` (`application/ports.py`) e o caso de uso `Monitoring` (`application/use_cases/monitoring.py`), que aplica a máscara e monta as páginas:
+2. **Consultas** pelo port `MonitoringStore` (`application/ports/monitoring.py`) e o caso de uso `Monitoring` (`application/use_cases/monitoring.py`), que aplica a máscara e monta as páginas:
    - paginação por chave: `id` decrescente, `?cursor=` é o último `id` visto, `?limit=` 1–200 (padrão 50). O store lê `limit + 1` linhas com `ROWNUM` para saber se há próxima página (`next_cursor`);
    - filtros `from`/`to` de `/events` valem para `received_at` (índice `ohip_event_raw_ix_recv`); `event_name` é normalizado como na gravação; `module_name` compara sem diferenciar maiúsculas;
    - status por chain = linhas de `OHIP_CONSUMER_STATUS` + `OHIP_OFFSET` + agregados de outbox (`PENDING`/`FAILED`), DLQ aberta (`resolved_at IS NULL`) e eventos dos últimos 5 min (eventos/min = total ÷ 5; p95 de `received_at − event_ts` com `PERCENTILE_CONT`). O relógio é o do banco;
