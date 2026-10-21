@@ -2,6 +2,7 @@
 
 - Status: Aceito (aprovado em 2026-10-01 com a Fase 0)
 - Data: 2026-10-01
+- Alteração: com o PostgreSQL (ADR-0021), a barreira usa `statement_timestamp()` e `%(epoch)s`; a regra não muda.
 
 ## Contexto
 

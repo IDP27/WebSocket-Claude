@@ -1,6 +1,6 @@
 # CLAUDE.md — Consumidor de Eventos OHIP Streaming
 
-Serviço Python que consome eventos do OPERA Cloud pela OHIP Streaming API (WebSocket + GraphQL), grava no Oracle 11g sem perda nem duplicidade e publica no RabbitMQ via outbox. O PRD vence em caso de conflito; na dúvida, pergunte.
+Serviço Python que consome eventos do OPERA Cloud pela OHIP Streaming API (WebSocket + GraphQL), grava no PostgreSQL sem perda nem duplicidade e publica no RabbitMQ via outbox. O PRD vence em caso de conflito; na dúvida, pergunte. Exceção registrada: o banco do PRD (Oracle 11g) foi trocado pelo PostgreSQL por decisão do tech lead (DV-15, ADR-0021).
 
 Leia antes de qualquer tarefa: `docs/ARCHITECTURE.md`, `docs/PLAN.md`, `docs/OPEN_QUESTIONS.md`, `docs/OHIP_APIS.md` e os ADRs em `docs/adr/`. Contratos da Oracle: `vendor/oracle-hospitality-api-docs/` (ADR-0012), conferidos por `tests/contract/`.
 
@@ -15,13 +15,21 @@ Leia antes de qualquer tarefa: `docs/ARCHITECTURE.md`, `docs/PLAN.md`, `docs/OPE
 
 ## Stack obrigatória
 
-Python 3.11+ · Poetry · systemd · FastAPI + Uvicorn · Flask + Gunicorn + Jinja2 (+HTMX) · Nginx · `websockets` (graphql-transport-ws manual) · `httpx` · `python-oracledb` **Thick** + Instant Client 19 · `aio-pika` · Redis · `pydantic-settings` · `structlog` · ruff, mypy, pytest, pytest-asyncio, respx, import-linter · py-spy.
+Python 3.11+ · Poetry · systemd · FastAPI + Uvicorn · Flask + Gunicorn + Jinja2 (+HTMX) · Nginx · `websockets` (graphql-transport-ws manual) · `httpx` · `psycopg` 3 + `psycopg_pool` (PostgreSQL 15+) · `aio-pika` · Redis · `pydantic-settings` · `structlog` · ruff, mypy, pytest, pytest-asyncio, respx, import-linter · py-spy.
 
-## Oracle 11g — sempre
+## PostgreSQL — sempre (ADR-0021)
 
-- Modo Thick; acesso **síncrono** (executor de 1 thread no consumer; rotas FastAPI `def`).
-- Sem `IDENTITY`, `DEFAULT seq.NEXTVAL`, `FETCH FIRST`, JSON nativo ou particionamento. Use `SEQUENCE` explícita, `ROWNUM`, `CLOB`, `MERGE`.
-- Identificadores ≤ 30 caracteres.
+> **Fase 11 em andamento:** o código ainda usa o adapter Oracle (`adapters/oracle/`, `sql/001`–`003`) até o adapter PostgreSQL ser aprovado. Código novo segue as regras abaixo.
+
+- Acesso **síncrono** com `psycopg` (executor de 1 thread no consumer; rotas FastAPI `def`). Modo assíncrono do driver só com ADR e teste de carga.
+- Sequências explícitas (`reserve_event_ids`); `ohip_outbox_seq` com `CACHE 1` (o cache é por sessão e quebraria a ordem da outbox).
+- Conexões com `autocommit=True`: escrita sempre em `with conn.transaction():` (aninhado = savepoint); leitura fora de transação (nada "idle in transaction").
+- Horário em comando e em `WHERE`: `statement_timestamp()` (nunca `clock_timestamp()`, que impede índice); colunas `timestamptz`; conexão com `TimeZone=UTC`.
+- Payload e mensagens em `text` (como recebidos), nunca `jsonb` nas tabelas de infraestrutura.
+- Concorrência entre instâncias: `INSERT ... ON CONFLICT` com alvo explícito; nunca `ON CONFLICT DO NOTHING` sem alvo (engoliria conflito na PK).
+- Texto livre gravado (DLQ, erros) troca `\x00` e surrogates isolados por `U+FFFD`.
+- Erros classificados por SQLSTATE (`adapters/postgres/errors.py`), nunca por texto de mensagem.
+- DDL só em `sql/postgres/`, aplicada pelo DBA; o projeto só roda DDL no contêiner descartável que o próprio `make test-db` cria (nunca num DSN informado).
 
 ## Protocolo OHIP — não negociável (ADR-0007)
 
@@ -29,26 +37,26 @@ Python 3.11+ · Poetry · systemd · FastAPI + Uvicorn · Flask + Gunicorn + Jin
 - `connection_init` ≤ 5 s com `Authorization: Bearer` e `x-app-key`; `subscribe` com GUID; `ping` a cada 15 s; `next` conta como prova de vida.
 - Encerrar: `complete` → drenar → **esperar o servidor fechar**; ≥ 10 s até o próximo `subscribe`; sempre enviar o último offset.
 - 4401 novo token · 4403/4406 parar e alertar · 4409 esperar 120 s + jitter · 4504 esperar 15 s · rede: backoff exponencial com jitter.
-- Um consumer por (appKey, chain, gateway): lease com prazo e epoch no Oracle; barreira `UPDATE ... WHERE epoch = :epoch` como **último comando** de toda transação de escrita (ADR-0008). Nada de trava no Redis.
+- Um consumer por (appKey, chain, gateway): lease com prazo e epoch no banco; barreira `UPDATE ... WHERE epoch = :epoch` como **último comando** de toda transação de escrita (ADR-0008). Nada de trava no Redis.
 - Regra dos 10 s vale também após crash/restart (`last_disconnect_at`, `RestartSec=10`).
 
 ## Garantias
 
 - Evento + offset + outbox na **mesma transação**; offset só confirmado após commit. Nenhum evento é descartado antes do commit (fila cheia → espera; travou → conexão envenenada: nada mais dela é gravado, `complete` e reconecta pelo offset commitado).
-- Erro por linha no lote: ORA-00001 nas constraints de dedup = duplicado; qualquer outro → DLQ `CONSUME` na mesma transação (ADR-0009).
-- Dedup: `UNIQUE(unique_event_id)` e `UNIQUE(chain_code, offset_value, primary_key)` no Oracle; `ohip:seen` no Redis só **depois** do commit (ADR-0009).
+- Erro por linha no lote: violação de unicidade nas constraints de dedup = duplicado; falta de recurso desfaz o lote; qualquer outro → DLQ `CONSUME` na mesma transação (ADR-0009, mecanismo no ADR-0022).
+- Dedup: `UNIQUE(unique_event_id)` e `UNIQUE(chain_code, offset_value, primary_key)` no banco; `ohip:seen` no Redis só **depois** do commit (ADR-0009).
 - Publicação **só** via outbox (inclusive reprocessamento e retries); cabeça da fila por chain sem pular; uma mensagem por vez por chain esperando o confirm; falha de broker não conta tentativa (ADR-0002).
 - Replay: troca do offset só com a conexão fechada, depois da drenagem (ARCHITECTURE §4.6).
 - Offset é string `^[0-9]{1,20}$` (ADR-0006).
 
 ## Camadas (ADR-0005)
 
-`entrypoints → application → domain`; adapters implementam ports. `domain`/`application` não importam `oracledb`, `websockets`, `fastapi`, `flask`, `aio_pika`, `redis`, `httpx`. O `ohip-admin` não importa adapters de Oracle/Redis (ADR-0004).
+`entrypoints → application → domain`; adapters implementam ports. `domain`/`application` não importam `psycopg`, `psycopg_pool`, `oracledb`, `websockets`, `fastapi`, `flask`, `aio_pika`, `redis`, `httpx`. O `ohip-admin` não importa adapters de banco/Redis (ADR-0004).
 
 ## Nunca
 
 - Rodar o consumer dentro de Uvicorn/Gunicorn.
-- `async def` em rota que toca o Oracle.
+- `async def` em rota que toca o banco.
 - Logar token, clientSecret, app key ou dados pessoais sem máscara.
 - Criar tabelas de domínio ou regras de evento antes da resposta da Q-1.
 - Otimizar sem medir; refatorar sem testes de caracterização.
@@ -68,7 +76,7 @@ Testes unitários e de integração passando (≥ 80% no núcleo) · ruff, mypy 
 ```bash
 make check              # tudo: ruff, mypy strict, import-linter, pytest + cobertura
 make format             # ruff format + correções automáticas
-make test-integration   # testes marcados oracle/rabbitmq/redis (precisa de infraestrutura)
+make test-integration   # testes marcados postgres/oracle/rabbitmq/redis (precisa de infraestrutura)
 ```
 
 Configuração: um grupo por prefixo em `src/ohip_streaming/config.py`, carregado com `load_settings(Grupo)` só nos entrypoints. Toda variável nova entra no `.env.example` (há teste). Logs: `get_logger()` e `bind_context(unique_event_id=..., chain_code=..., offset=...)` de `ohip_streaming.logging`.

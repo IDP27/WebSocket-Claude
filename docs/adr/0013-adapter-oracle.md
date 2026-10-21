@@ -2,6 +2,7 @@
 
 - Status: Proposto (Fase 3)
 - Data: 2026-10-01
+- Substituição: **ADR-0021** e **ADR-0022** (PostgreSQL, Fase 11). Vale até o adapter PostgreSQL ser aprovado.
 
 ## Contexto
 

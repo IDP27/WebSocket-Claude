@@ -2,6 +2,7 @@
 
 - Status: Aceito (aprovado em 2026-10-01 com a Fase 0)
 - Data: 2026-10-01
+- Alteração: com o PostgreSQL (ADR-0021), o mecanismo do erro por linha passa a ser o do **ADR-0022** (savepoints, sem `batcherrors`); as garantias deste ADR não mudam. Correção (2026-10-21): a métrica `ohip_duplicates_total` foi implementada só com o rótulo `chain_code`. O rótulo `{constraint}` citado abaixo nunca existiu; a constraint aparece na classificação e no log.
 
 ## Contexto
 

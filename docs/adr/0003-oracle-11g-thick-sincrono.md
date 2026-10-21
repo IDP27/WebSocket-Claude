@@ -2,6 +2,7 @@
 
 - Status: Aceito (aprovado em 2026-10-01 com a Fase 0)
 - Data: 2026-10-01
+- Substituição: **ADR-0021** (PostgreSQL, Fase 11). Vale até o adapter PostgreSQL ser aprovado.
 
 ## Contexto
 

@@ -2,6 +2,7 @@
 
 - Status: Proposto (Fase 9)
 - Data: 2026-10-05
+- Alteração: com o PostgreSQL (ADR-0021), o `MERGE` condicional vira `INSERT ... ON CONFLICT (chave) DO UPDATE ... WHERE` (ADR-0022 §5); a semântica não muda.
 
 ## Contexto
 
