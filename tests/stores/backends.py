@@ -52,6 +52,7 @@ from ohip_streaming.application.ports import (
 )
 from ohip_streaming.config import Environment, PostgresSettings
 from ohip_streaming.domain.events import Event
+from ohip_streaming.domain.leases import consumer_lease
 from ohip_streaming.domain.offset import Offset
 
 TEST_CHAINS = ("ZZT1", "ZZT2")
@@ -227,8 +228,8 @@ _PG_CLEANUP = (
     "DELETE FROM ohip_lease WHERE lease_name = 'consumer:' || %(chain)s",
 )
 _PG_SEED = (
-    "INSERT INTO ohip_lease (lease_name, epoch, expires_at)"
-    " VALUES ('consumer:' || %(chain)s, 0, statement_timestamp())",
+    "INSERT INTO ohip_lease (lease_name, epoch, expires_at)"  # noqa: S608 - prefixo do domínio
+    f" VALUES ('{consumer_lease('')}' || %(chain)s, 0, statement_timestamp())",
     "INSERT INTO ohip_offset (chain_code, last_offset) VALUES (%(chain)s, NULL)",
     "INSERT INTO ohip_consumer_status (chain_code, state) VALUES (%(chain)s, 'STOPPED')",
 )

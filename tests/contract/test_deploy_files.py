@@ -188,3 +188,20 @@ def test_rare_event_rules_see_the_first_occurrence() -> None:
     text = ALERTS.read_text(encoding="utf-8")
     for name in rare:
         assert re.search(rf"{name} > 0 unless {name} offset \d+[mh]", text), name
+
+
+# ---------------------------------------------------------- nomes dos leases (refatoração 10)
+
+
+def test_lease_seeds_use_the_names_from_the_domain() -> None:
+    """Os seeds do DBA criam as linhas de OHIP_LEASE com os mesmos nomes que o LeaseKeeper
+    disputa e a barreira confere (``domain/leases.py``). Se divergirem, o processo não sobe
+    (``LeaseNotProvisionedError``)."""
+    from ohip_streaming.domain.leases import PUBLISHER_LEASE, consumer_lease
+
+    sql = ROOT / "sql" / "postgres"
+    publisher = (sql / "002_seed_publisher.sql").read_text(encoding="utf-8")
+    chain = (sql / "003_seed_chain.sql").read_text(encoding="utf-8")
+    assert f"VALUES ('{PUBLISHER_LEASE}', 0, now())" in publisher
+    prefix = consumer_lease("")
+    assert f"VALUES ('{prefix}' || :'chain_code', 0, now())" in chain

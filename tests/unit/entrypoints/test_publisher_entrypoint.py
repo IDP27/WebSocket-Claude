@@ -53,6 +53,6 @@ async def test_compose_builds_and_closes(
     async with entry.compose(config) as service:
         assert isinstance(service, PublisherService)
         lease: Any = service._lease
-        assert lease._name == "publisher"
+        assert lease.name == "publisher"
     assert closed == ["redis", "postgres"]
     assert entry.alert_counters() == [("ohip_lease_lost_total", {"lease": "publisher"})]

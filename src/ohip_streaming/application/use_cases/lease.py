@@ -58,6 +58,11 @@ class LeaseKeeper:
         self._lost = False
 
     @property
+    def name(self) -> str:
+        """Nome disputado em ``OHIP_LEASE`` (o mesmo da barreira, ``domain/leases.py``)."""
+        return self._name
+
+    @property
     def epoch(self) -> int | None:
         """Epoch atual, ou None se não somos donos (ou o prazo local venceu)."""
         if self._epoch is None or self._valid_until is None:

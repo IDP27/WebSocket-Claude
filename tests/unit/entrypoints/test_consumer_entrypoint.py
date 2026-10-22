@@ -86,7 +86,7 @@ async def test_compose_builds_and_closes_everything(
         assert deps.lease._options.ttl_s == 40
         # Caracterização (refatoração 10): o nome que o LeaseKeeper disputa é o mesmo da
         # barreira de epoch do adapter (test_pg_event_store: "consumer:<chain>").
-        assert deps.lease._name == "consumer:CHAIN1"
+        assert deps.lease.name == "consumer:CHAIN1"
         # Caracterização (refatoração 11): sem lista extra, a máscara padrão da Q-9 na fila.
         assert deps.batch._options.masking == MaskingPolicy()
         assert deps.retry_dlq._options.masking == MaskingPolicy()
