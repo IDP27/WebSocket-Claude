@@ -14,7 +14,7 @@ from collections.abc import Callable
 from typing import Any
 
 import pytest
-from tests.fakes.oracle_driver import FakeOracle
+from tests.fakes.postgres_driver import FakePool
 from tests.unit.adapters.test_redis_adapters import FakeRedis
 from tests.unit.entrypoints import (
     test_consumer_entrypoint as consumer_t,
@@ -76,7 +76,7 @@ async def test_serve_wires_signals_and_writes_the_last_snapshot(
     }[module]
     config = config_cls.load()
     redis = Closable()
-    monkeypatch.setattr(module, "open_pool", lambda settings: FakeOracle())
+    monkeypatch.setattr(module, "open_pool", lambda settings, **kw: FakePool())
     monkeypatch.setattr(module, "open_redis", lambda settings: redis)
 
     async def run(self: Any, *args: Any) -> None:

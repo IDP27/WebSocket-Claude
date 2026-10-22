@@ -275,7 +275,7 @@ async def test_database_outage_poisons_and_resumes_from_committed(
 
     def fail_second_batch(_batch: Any) -> Exception | None:
         calls["n"] += 1
-        return StoreUnavailableError("oracle fora") if calls["n"] == 2 else None
+        return StoreUnavailableError("banco fora") if calls["n"] == 2 else None
 
     h.db.fail_persist_when = fail_second_batch
     h.consumer = ChainConsumer(h.deps, replace(OPTIONS, batch_max_events=2))
@@ -436,7 +436,7 @@ async def test_unexpected_write_error_poisons_quickly(
     async def fail_second(context: Any, messages: Any) -> Any:
         calls["n"] += 1
         if calls["n"] == 2:
-            raise StoreOperationError("ORA-01031: insufficient privileges")
+            raise StoreOperationError("42501: insufficient privileges")
         return await real_execute(context, messages)
 
     monkeypatch.setattr(h.batch, "execute", fail_second)
@@ -615,7 +615,7 @@ async def test_status_write_failure_does_not_break_the_session(server: FakeOhipS
     async def broken(chain_code: str, health: Any) -> None:
         nonlocal calls
         calls += 1
-        raise StoreOperationError("ORA-01031: privilégios insuficientes")
+        raise StoreOperationError("42501: privilégios insuficientes")
 
     h.db.record_health = broken  # type: ignore[method-assign]
     h.start()

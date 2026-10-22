@@ -1,10 +1,10 @@
 """Ports (interfaces) da aplicação. Os adapters (Fases 3 a 9) implementam; os testes usam fakes.
 
-Todos assíncronos: o adapter Oracle roda o driver síncrono em executor próprio
+Todos assíncronos: o adapter do banco roda o driver síncrono em executor próprio
 (ADR-0003, ``ohip_streaming.logging.run_in_executor``), sem que os casos de uso saibam disso.
 
 Contratos transacionais importantes estão descritos em cada método: o fake em memória
-(tests/fakes) e o adapter Oracle precisam se comportar igual.
+(tests/fakes) e o adapter do banco precisam se comportar igual.
 
 Pacote por contexto (refatoração 3 do /entender); os nomes continuam importáveis daqui.
 """

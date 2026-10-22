@@ -14,7 +14,7 @@ from ohip_streaming.entrypoints.admin.settings import load_panel_settings
 _PREFIXES = (
     "APP_",
     "OHIP_",
-    "ORACLE_",
+    "POSTGRES_",
     "RABBITMQ_",
     "REDIS_",
     "CONSUMER_",

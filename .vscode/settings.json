@@ -4,11 +4,11 @@
   "python.analysis.extraPaths": ["${workspaceFolder}/src"],
   "python.envFile": "${workspaceFolder}/.vscode/test.env",
 
-  // Testes: mesma seleção do `make test` (sem Oracle/RabbitMQ/Redis/carga).
-  // Os testes de Oracle real aparecem como "skipped" até haver schema de teste (Q-17).
+  // Testes: mesma seleção do `make test` (sem PostgreSQL/RabbitMQ/Redis/carga).
+  // Os de PostgreSQL rodam com `make test-db` + `make test-postgres` (contêiner local).
   "python.testing.pytestEnabled": true,
   "python.testing.unittestEnabled": false,
-  "python.testing.pytestArgs": ["tests", "-m", "not oracle and not rabbitmq and not redis and not load"],
+  "python.testing.pytestArgs": ["tests", "-m", "not postgres and not rabbitmq and not redis and not load"],
 
   "[python]": {
     "editor.defaultFormatter": "charliermarsh.ruff",

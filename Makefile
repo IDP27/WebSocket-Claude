@@ -8,9 +8,9 @@ RUN := PYTHONPATH=src $(POETRY) run
 else
 RUN := PYTHONPATH=src PATH="$(CURDIR)/.venv/bin:$$PATH"
 endif
-UNIT_MARKERS := not oracle and not rabbitmq and not redis and not load
+UNIT_MARKERS := not postgres and not rabbitmq and not redis and not load
 
-.PHONY: help install lint format typecheck imports test test-integration test-load oracle-docs check clean
+.PHONY: help install lint format typecheck imports test test-integration test-postgres test-db test-db-down test-load oracle-docs check clean
 
 help:  ## Lista os alvos
 	@grep -E '^[a-z-]+:.*##' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-18s %s\n", $$1, $$2}'
@@ -36,8 +36,19 @@ imports:  ## Contratos de arquitetura (import-linter)
 test:  ## Testes sem infraestrutura, com cobertura
 	$(RUN) pytest -m "$(UNIT_MARKERS)" --cov --cov-report=term-missing
 
-test-integration:  ## Testes que precisam de Oracle/RabbitMQ/Redis de teste
-	$(RUN) pytest -m "oracle or rabbitmq or redis"
+test-integration:  ## Testes que precisam de PostgreSQL/RabbitMQ/Redis de teste
+	$(RUN) pytest -m "postgres or rabbitmq or redis"
+
+test-db:  ## Cria um PostgreSQL descartável em contêiner e aplica sql/postgres/ (ADR-0021 §9)
+	scripts/test_db.sh up
+
+test-db-down:  ## Remove o PostgreSQL descartável criado por test-db
+	scripts/test_db.sh down
+
+test-postgres:  ## Testes de PostgreSQL: contêiner do test-db (.test-db.env) ou TEST_POSTGRES_DSN do ambiente
+	@if [ -f .test-db.env ]; then set -a; . ./.test-db.env; set +a; fi; \
+	test -n "$$TEST_POSTGRES_DSN" || { echo "rode 'make test-db' ou defina TEST_POSTGRES_DSN"; exit 1; }; \
+	$(RUN) pytest -m postgres
 
 test-load:  ## Teste de carga do consumer (RNF-13; LOAD_* ajustam, ver tests/load/)
 	$(RUN) pytest -m load -s tests/load

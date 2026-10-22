@@ -167,7 +167,7 @@ async def test_rest_rejection_goes_to_enrich_stage() -> None:
 
 async def test_success_on_second_attempt() -> None:
     db, raw_id = await seeded()
-    db.fail_apply = [StoreOperationError("ORA-00001 corrida do MERGE")]
+    db.fail_apply = [StoreOperationError("23505 corrida do ON CONFLICT")]
     svc, _, _ = service(db, [Rule()])
     assert await svc.handle(message(raw_id)) is Disposition.ACK
     assert db.raw[raw_id].status is ProcessingStatus.NORMALIZED
@@ -175,7 +175,7 @@ async def test_success_on_second_attempt() -> None:
 
 
 @pytest.mark.parametrize(
-    "error", [StoreUnavailableError("ORA-03113"), ResourceUnavailableError("REST fora")]
+    "error", [StoreUnavailableError("08006"), ResourceUnavailableError("REST fora")]
 )
 async def test_infrastructure_failure_requeues_with_backoff(error: Exception) -> None:
     db, raw_id = await seeded()
@@ -299,13 +299,13 @@ async def test_repeated_rest_403_opens_the_breaker_instead_of_draining_to_dlq() 
 
 async def test_success_closes_the_breaker() -> None:
     db, raw_id = await seeded()
-    rule = Rule(fail=StoreOperationError("ORA-00942: tabela ou view inexistente"))
+    rule = Rule(fail=StoreOperationError("42P01: tabela ou view inexistente"))
     svc, _, _ = service(db, [rule], max_attempts=1, systemic_failure_threshold=2)
     assert await svc.handle(message(raw_id, "a")) is Disposition.ACK  # 1ª: DLQ
     assert await svc.handle(message(raw_id, "b")) is Disposition.REQUEUE  # aberto
     rule.fail = None  # o DBA deu o grant
     assert await svc.handle(message(raw_id, "b")) is Disposition.ACK
-    rule.fail = StoreOperationError("ORA-00942")
+    rule.fail = StoreOperationError("42P01")
     assert await svc.handle(message(raw_id, "c")) is Disposition.ACK  # contagem recomeçou
     assert len(db.dlq) == 2
 
@@ -315,7 +315,7 @@ async def test_different_failures_do_not_add_up() -> None:
     rule = Rule(fail=RuleError("campo ausente"))
     svc, _, _ = service(db, [rule], max_attempts=1, systemic_failure_threshold=2)
     assert await svc.handle(message(raw_id, "a")) is Disposition.ACK
-    rule.fail = StoreOperationError("ORA-01400")
+    rule.fail = StoreOperationError("23502")
     assert await svc.handle(message(raw_id, "b")) is Disposition.ACK
     assert len(db.dlq) == 2
 
@@ -355,12 +355,12 @@ async def test_unmapped_events_do_not_close_a_rule_breaker() -> None:
 async def test_unmapped_closes_a_breaker_opened_without_rule() -> None:
     # Antes da Q-1 (sem regras): grant faltando no ohip_event_raw, depois corrigido.
     db, raw_id = await seeded()
-    db.fail_apply = [StoreOperationError("ORA-01031: privilégios insuficientes")] * 2
+    db.fail_apply = [StoreOperationError("42501: privilégios insuficientes")] * 2
     svc, _, _ = service(db, max_attempts=1, systemic_failure_threshold=2)
     assert await svc.handle(message(raw_id, "a")) is Disposition.ACK  # DLQ
     assert await svc.handle(message(raw_id, "b")) is Disposition.REQUEUE  # abriu
     assert await svc.handle(message(raw_id, "b")) is Disposition.ACK  # UNMAPPED: fechou
-    db.fail_apply = [StoreOperationError("ORA-01031")]
+    db.fail_apply = [StoreOperationError("42501")]
     assert await svc.handle(message(raw_id, "c")) is Disposition.ACK  # contagem recomeçou
     assert len(db.dlq) == 2
 

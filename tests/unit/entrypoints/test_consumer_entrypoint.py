@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-from tests.fakes.oracle_driver import FakeOracle
+from tests.fakes.postgres_driver import FakePool
 from tests.unit.adapters.test_redis_adapters import FakeRedis
 from tests.unit.test_config import OHIP_MIN_ENV, set_env
 
@@ -19,9 +19,10 @@ ENV = {
     **OHIP_MIN_ENV,
     "OHIP_HOTEL_CODES": "H1,H2",
     "OHIP_EVENT_TIMEZONE": "America/Sao_Paulo",
-    "ORACLE_DSN": "db:1521/svc",
-    "ORACLE_USER": "ohip_app",
-    "ORACLE_PASSWORD": "senha",
+    "POSTGRES_HOST": "db",
+    "POSTGRES_DB": "ohip",
+    "POSTGRES_USER": "ohip_app",
+    "POSTGRES_PASSWORD": "senha",
     "REDIS_URL": "redis://:senha@localhost:6379/0",
     "RABBITMQ_URL": "amqps://u:senha@broker/vhost",
     "CONSUMER_BATCH_MAX_WAIT_MS": "250",
@@ -59,20 +60,20 @@ def test_instance_id_is_unique() -> None:
 async def test_compose_builds_and_closes_everything(
     config: entry.ConsumerConfig, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    pool = FakeOracle()
+    pool = FakePool()
     closed: list[str] = []
 
     class ClosingRedis(FakeRedis):
         async def aclose(self) -> None:
             closed.append("redis")
 
-    monkeypatch.setattr(entry, "open_pool", lambda settings: pool)
+    monkeypatch.setattr(entry, "open_pool", lambda settings, **kw: pool)
     monkeypatch.setattr(entry, "open_redis", lambda settings: ClosingRedis())
     original_close = pool.close
 
-    def close_pool(force: bool = False) -> None:
-        closed.append("oracle")
-        original_close(force)
+    def close_pool(timeout: float = 5.0) -> None:
+        closed.append("postgres")
+        original_close(timeout)
 
     monkeypatch.setattr(pool, "close", close_pool)
 
@@ -82,4 +83,4 @@ async def test_compose_builds_and_closes_everything(
         assert deps.app_key == "app-key-secreta"
         assert "app-key-secreta" not in repr(deps)  # segredo fora do repr
         assert deps.lease._options.ttl_s == 40
-    assert closed == ["redis", "oracle"]
+    assert closed == ["redis", "postgres"]

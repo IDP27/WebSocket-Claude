@@ -1,6 +1,6 @@
 """``/metrics`` em texto Prometheus 0.0.4, gerado à mão (ARCHITECTURE §10, ADR-0017).
 
-Gauges por chain tirados do status (Oracle) e os contadores dos processos (snapshots no
+Gauges por chain tirados do status (banco) e os contadores dos processos (snapshots no
 Redis), com os rótulos ``process`` e ``instance``. Nome ou rótulo fora do padrão é
 descartado; valores de rótulo são escapados.
 """
@@ -87,7 +87,7 @@ def render(
     """``None`` = fonte indisponível (``ohip_metrics_source_up`` 0)."""
     registry = _Registry()
     registry.add("ohip_api_up", 1, {}, kind="gauge", help="API de controle de pé")
-    for source, ok in (("oracle", status is not None), ("redis", processes is not None)):
+    for source, ok in (("postgres", status is not None), ("redis", processes is not None)):
         registry.add(
             "ohip_metrics_source_up",
             1 if ok else 0,

@@ -11,7 +11,7 @@ Garantias (ADR-0002, ADR-0008, ADR-0009):
   enquanto a instância viver (uma por processo consumer) e **não** zera ao disparar: numa
   falha sistêmica longa, cada reconexão dispara de novo sem mandar mais nada para a DLQ.
   Reiniciar o processo zera;
-- números de cartão são removidos antes de gravar (payload e DLQ), nunca chegam ao Oracle;
+- números de cartão são removidos antes de gravar (payload e DLQ), nunca chegam ao banco;
 - banco fora ou lease perdido → a exceção sobe (o consumer envenena a conexão ou encerra).
 
 ``RetryConsumeDlq`` regrava itens de DLQ CONSUME cujo retry foi pedido pela API.
@@ -332,7 +332,7 @@ async def _mark_seen(seen: SeenCache, result: BatchResult) -> None:
         return
     try:
         await seen.mark_seen(ids)
-    except Exception:  # só atalho; o UNIQUE do Oracle garante
+    except Exception:  # só atalho; o UNIQUE do banco garante
         log.warning("seen_cache_indisponivel", exc_info=True)
 
 

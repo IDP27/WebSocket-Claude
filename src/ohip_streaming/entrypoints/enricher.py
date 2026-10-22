@@ -1,4 +1,4 @@
-"""Processo ``ohip-enricher``: consome ``ohip.enricher`` e normaliza no Oracle (ADR-0019).
+"""Processo ``ohip-enricher``: consome ``ohip.enricher`` e normaliza no banco (ADR-0019).
 
 Uso (systemd, Fase 10): ``ohip-enricher``; N instâncias em paralelo (MERGE condicional, sem
 lease). SIGTERM/SIGINT: termina a mensagem em curso e sai; o que não teve ``ack`` volta para
@@ -20,8 +20,8 @@ import httpx
 
 from ohip_streaming.adapters.ohip_rest.oauth import OhipTokenIssuer, credentials_from_settings
 from ohip_streaming.adapters.ohip_rest.resources import OhipResourceFetcher, RateLimiter
-from ohip_streaming.adapters.oracle.database import PooledSession, open_pool
-from ohip_streaming.adapters.oracle.enrichment_store import OracleEnrichmentStore
+from ohip_streaming.adapters.postgres.database import PooledSession, open_pool
+from ohip_streaming.adapters.postgres.enrichment_store import PostgresEnrichmentStore
 from ohip_streaming.adapters.rabbitmq.consumer import (
     AioPikaQueueConsumer,
     ConsumerOptions,
@@ -49,7 +49,7 @@ from ohip_streaming.config import (
     AppSettings,
     EnricherSettings,
     OhipSettings,
-    OracleSettings,
+    PostgresSettings,
     RabbitMQSettings,
     RedisSettings,
     load_settings,
@@ -64,7 +64,7 @@ log = get_logger(__name__)
 @dataclass(frozen=True)
 class EnricherConfig:
     app: AppSettings
-    oracle: OracleSettings
+    db: PostgresSettings
     redis: RedisSettings
     rabbitmq: RabbitMQSettings
     enricher: EnricherSettings
@@ -75,7 +75,7 @@ class EnricherConfig:
         enricher = load_settings(EnricherSettings)
         return cls(
             app=load_settings(AppSettings),
-            oracle=load_settings(OracleSettings),
+            db=load_settings(PostgresSettings),
             redis=load_settings(RedisSettings),
             rabbitmq=load_settings(RabbitMQSettings),
             enricher=enricher,
@@ -133,13 +133,15 @@ async def compose(config: EnricherConfig) -> AsyncIterator[EnricherRuntime]:
     clock = SystemClock()
     metrics = InMemoryMetrics()
     preregister(metrics, alert_counters())
-    pool = open_pool(config.oracle)
-    executor = ThreadPoolExecutor(config.oracle.pool_max, thread_name_prefix="oracle-enricher")
-    session = PooledSession(pool, call_timeout_ms=config.oracle.call_timeout_ms, executor=executor)
+    pool = open_pool(
+        config.db, environment=config.app.environment, application_name="ohip-enricher"
+    )
+    executor = ThreadPoolExecutor(config.db.pool_max, thread_name_prefix="postgres-enricher")
+    session = PooledSession(pool, executor=executor)
     redis = open_redis(config.redis)
     http: httpx.AsyncClient | None = None
     try:
-        store = OracleEnrichmentStore(session, code_version=config.app.code_version)
+        store = PostgresEnrichmentStore(session, code_version=config.app.code_version)
         fetcher: ResourceFetcher = DisabledFetcher()
         if config.ohip is not None:
             o, e = config.ohip, config.enricher
@@ -187,7 +189,7 @@ async def compose(config: EnricherConfig) -> AsyncIterator[EnricherRuntime]:
         if http is not None:
             await http.aclose()
         await redis.aclose()
-        pool.close(force=True)
+        pool.close()
         executor.shutdown(wait=False)
 
 

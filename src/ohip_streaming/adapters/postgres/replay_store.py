@@ -1,7 +1,7 @@
-"""``ReplayStore`` no Oracle (ARCHITECTURE §4.6, API.md).
+"""``ReplayStore`` no PostgreSQL (ARCHITECTURE §4.6, API.md).
 
 O pedido é gravado pela API e aplicado pelo consumer com a conexão do OHIP fechada, numa
-transação com barreira de epoch. O índice único por função ``ohip_replay_ux_pending`` garante
+transação com barreira de epoch. O índice único parcial ``ohip_replay_ux_pending`` garante
 no máximo um pedido ``PENDING`` por chain.
 """
 
@@ -11,12 +11,12 @@ from collections.abc import Sequence
 from datetime import datetime
 from typing import Any
 
-import oracledb
+import psycopg
 
-from ohip_streaming.adapters.oracle.database import Cursor, Session, fence, query, transaction
-from ohip_streaming.adapters.oracle.errors import driver_error, violated_constraint
-from ohip_streaming.adapters.oracle.event_store import consumer_lease
-from ohip_streaming.adapters.oracle.rows import from_db, from_db_required
+from ohip_streaming.adapters.postgres.database import Cursor, Session, fence, query, transaction
+from ohip_streaming.adapters.postgres.errors import violated_constraint
+from ohip_streaming.adapters.postgres.event_store import consumer_lease
+from ohip_streaming.adapters.postgres.rows import from_db, from_db_required
 from ohip_streaming.application.errors import (
     ReplayAlreadyPendingError,
     StoreOperationError,
@@ -25,46 +25,48 @@ from ohip_streaming.application.errors import (
 from ohip_streaming.application.ports import ReplayRequest, ReplayStatus
 from ohip_streaming.domain.offset import Offset
 
-PENDING_INDEX = "OHIP_REPLAY_UX_PENDING"
+PENDING_INDEX = "ohip_replay_ux_pending"
 
-LAST_OFFSET_SQL = "SELECT last_offset FROM ohip_offset WHERE chain_code = :chain_code"
+LAST_OFFSET_SQL = "SELECT last_offset FROM ohip_offset WHERE chain_code = %(chain_code)s"
 
 OFFSET_RECEIVED_AT_SQL = """
 SELECT MIN(received_at)
   FROM ohip_event_raw
- WHERE chain_code = :chain_code
-   AND offset_value = :offset_value"""
+ WHERE chain_code = %(chain_code)s
+   AND offset_value = %(offset_value)s"""
 
 INSERT_REQUEST_SQL = """
 INSERT INTO ohip_replay_request (id, chain_code, from_offset, reason, requested_by)
-VALUES (ohip_replay_req_seq.NEXTVAL, :chain_code, :from_offset, :reason, :requested_by)
-RETURNING id, created_at INTO :id, :created_at"""
+VALUES (
+    nextval('ohip_replay_req_seq'), %(chain_code)s, %(from_offset)s, %(reason)s, %(requested_by)s
+)
+RETURNING id, created_at"""
 
 PENDING_REQUEST_SQL = """
 SELECT id, chain_code, from_offset, reason, requested_by, status, created_at
   FROM ohip_replay_request
- WHERE chain_code = :chain_code
+ WHERE chain_code = %(chain_code)s
    AND status = 'PENDING'"""
 
 APPLY_REQUEST_SQL = """
 UPDATE ohip_replay_request
-   SET status = 'APPLIED', applied_at = SYS_EXTRACT_UTC(SYSTIMESTAMP)
- WHERE id = :id
+   SET status = 'APPLIED', applied_at = statement_timestamp()
+ WHERE id = %(id)s
    AND status = 'PENDING'"""
 
 MOVE_OFFSET_SQL = """
 UPDATE ohip_offset
-   SET last_offset = :last_offset,
+   SET last_offset = %(last_offset)s,
        last_unique_event_id = NULL,
-       updated_at = SYS_EXTRACT_UTC(SYSTIMESTAMP)
- WHERE chain_code = :chain_code"""
+       updated_at = statement_timestamp()
+ WHERE chain_code = %(chain_code)s"""
 
 CANCEL_REQUEST_SQL = """
 UPDATE ohip_replay_request
    SET status = 'CANCELLED',
-       cancelled_at = SYS_EXTRACT_UTC(SYSTIMESTAMP),
-       cancelled_by = :cancelled_by
- WHERE id = :id
+       cancelled_at = statement_timestamp(),
+       cancelled_by = %(cancelled_by)s
+ WHERE id = %(id)s
    AND status = 'PENDING'"""
 
 
@@ -81,7 +83,7 @@ def _request(row: Sequence[Any]) -> ReplayRequest:
     )
 
 
-class OracleReplayStore:
+class PostgresReplayStore:
     """Implementa ``ReplayStore``. API e consumer usam ``PooledSession``/``DedicatedSession``."""
 
     def __init__(self, session: Session) -> None:
@@ -104,7 +106,6 @@ class OracleReplayStore:
         self, chain_code: str, from_offset: Offset, reason: str, requested_by: str
     ) -> ReplayRequest:
         def body(cursor: Cursor) -> ReplayRequest:
-            id_var, created_var = cursor.var(int), cursor.var(oracledb.DB_TYPE_TIMESTAMP)
             try:
                 cursor.execute(
                     INSERT_REQUEST_SQL,
@@ -113,17 +114,13 @@ class OracleReplayStore:
                         "from_offset": from_offset.value,
                         "reason": reason,
                         "requested_by": requested_by,
-                        "id": id_var,
-                        "created_at": created_var,
                     },
                 )
-            except oracledb.IntegrityError as exc:
-                error = driver_error(exc)
-                if error is not None and violated_constraint(error) == PENDING_INDEX:
+            except psycopg.IntegrityError as exc:
+                if violated_constraint(exc) == PENDING_INDEX:
                     raise ReplayAlreadyPendingError(chain_code) from exc
                 raise
-            (request_id,) = id_var.getvalue()
-            (created_at,) = created_var.getvalue()
+            request_id, created_at = cursor.fetchone()
             return ReplayRequest(
                 id=int(request_id),
                 chain_code=chain_code,

@@ -46,7 +46,7 @@ class Event:
     publisher_id: str | None
     action_instance_id: str | None
     detail: tuple[EventDetail, ...]
-    payload_json: str  # o newEvent como recebido (compacto), fonte da verdade no Oracle
+    payload_json: str  # o newEvent como recebido (compacto), fonte da verdade no banco
     subscription_id: str
     received_at: datetime  # UTC
 
@@ -178,7 +178,7 @@ def parse_new_event(
     event_tz: tzinfo,
     raw: str,
 ) -> Event | RejectedMessage:
-    """Converte o objeto ``newEvent`` em ``Event`` (usado também para reconstruir do Oracle)."""
+    """Converte o objeto ``newEvent`` em ``Event`` (usado também para reconstruir do banco)."""
     offset, unique_id = _best_effort_ids(new_event)
 
     def reject(reason: str) -> RejectedMessage:

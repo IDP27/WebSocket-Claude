@@ -13,9 +13,9 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 
-from ohip_streaming.adapters.oracle.database import PooledSession, open_pool
-from ohip_streaming.adapters.oracle.lease_store import OracleLeaseStore
-from ohip_streaming.adapters.oracle.outbox_store import OracleOutboxStore
+from ohip_streaming.adapters.postgres.database import PooledSession, open_pool
+from ohip_streaming.adapters.postgres.lease_store import PostgresLeaseStore
+from ohip_streaming.adapters.postgres.outbox_store import PostgresOutboxStore
 from ohip_streaming.adapters.rabbitmq.publisher import AioPikaPublisher
 from ohip_streaming.adapters.redis.client import open_redis
 from ohip_streaming.adapters.redis.metrics import (
@@ -32,7 +32,7 @@ from ohip_streaming.application.use_cases.publisher_service import (
 from ohip_streaming.config import (
     AppSettings,
     LeaseSettings,
-    OracleSettings,
+    PostgresSettings,
     PublisherSettings,
     RabbitMQSettings,
     RedisSettings,
@@ -50,7 +50,7 @@ LEASE_NAME = "publisher"
 @dataclass(frozen=True)
 class PublisherConfig:
     app: AppSettings
-    oracle: OracleSettings
+    db: PostgresSettings
     redis: RedisSettings
     rabbitmq: RabbitMQSettings
     publisher: PublisherSettings
@@ -60,7 +60,7 @@ class PublisherConfig:
     def load(cls) -> PublisherConfig:
         return cls(
             app=load_settings(AppSettings),
-            oracle=load_settings(OracleSettings),
+            db=load_settings(PostgresSettings),
             redis=load_settings(RedisSettings),
             rabbitmq=load_settings(RabbitMQSettings),
             publisher=load_settings(PublisherSettings),
@@ -93,13 +93,15 @@ async def compose(config: PublisherConfig) -> AsyncIterator[PublisherService]:
     clock = SystemClock()
     metrics = InMemoryMetrics()
     preregister(metrics, alert_counters())
-    pool = open_pool(config.oracle)
-    executor = ThreadPoolExecutor(config.oracle.pool_max, thread_name_prefix="oracle-publisher")
-    session = PooledSession(pool, call_timeout_ms=config.oracle.call_timeout_ms, executor=executor)
+    pool = open_pool(
+        config.db, environment=config.app.environment, application_name="ohip-publisher"
+    )
+    executor = ThreadPoolExecutor(config.db.pool_max, thread_name_prefix="postgres-publisher")
+    session = PooledSession(pool, executor=executor)
     broker = AioPikaPublisher.from_settings(config.rabbitmq)
     redis = open_redis(config.redis)
     try:
-        store = OracleOutboxStore(session, code_version=config.app.code_version)
+        store = PostgresOutboxStore(session, code_version=config.app.code_version)
         service = PublisherService(
             store=store,
             publish=PublishOutbox(
@@ -110,7 +112,7 @@ async def compose(config: PublisherConfig) -> AsyncIterator[PublisherService]:
                 options=publish_options(config),
             ),
             lease=LeaseKeeper(
-                store=OracleLeaseStore(session),
+                store=PostgresLeaseStore(session),
                 clock=clock,
                 metrics=metrics,
                 lease_name=LEASE_NAME,
@@ -132,7 +134,7 @@ async def compose(config: PublisherConfig) -> AsyncIterator[PublisherService]:
     finally:
         await broker.close()
         await redis.aclose()
-        pool.close(force=True)
+        pool.close()
         executor.shutdown(wait=False)
 
 

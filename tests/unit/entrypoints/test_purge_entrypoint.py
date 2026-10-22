@@ -9,19 +9,20 @@ from typing import Any
 import pytest
 import structlog
 from pydantic import ValidationError
-from tests.fakes.oracle_driver import FakeOracle
+from tests.fakes.postgres_driver import FakeConnection, FakePool
 from tests.unit.test_config import set_env
 
-from ohip_streaming.adapters.oracle.purge_store import count_sql
+from ohip_streaming.adapters.postgres.purge_store import count_sql
 from ohip_streaming.application.ports import PurgeTarget
 from ohip_streaming.application.use_cases.purge import PurgeResult
 from ohip_streaming.config import PurgeSettings, load_settings
 from ohip_streaming.entrypoints import purge as entry
 
 ENV = {
-    "ORACLE_DSN": "db:1521/svc",
-    "ORACLE_USER": "ohip_purge",
-    "ORACLE_PASSWORD": "senha",
+    "POSTGRES_HOST": "db",
+    "POSTGRES_DB": "ohip",
+    "POSTGRES_USER": "ohip_purge",
+    "POSTGRES_PASSWORD": "senha",
 }
 
 
@@ -62,19 +63,32 @@ def test_settings_refuse_dangerous_values(
 async def test_serve_counts_with_the_pool_and_closes_it(
     config: entry.PurgeConfig, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    pool = FakeOracle()
-    for target in PurgeTarget:
-        pool.rows(count_sql(target), [(3,)])
+    counts = {count_sql(target) for target in PurgeTarget}
+    executed: list[str] = []
+
+    def script(statement: str, params: object) -> object:
+        executed.append(statement)
+        return [(3,)] if statement in counts else None
+
+    pool = FakePool([FakeConnection(script) for _ in PurgeTarget])
+    opened: list[dict[str, object]] = []
     closed: list[bool] = []
-    monkeypatch.setattr(entry, "open_pool", lambda settings: pool)
-    monkeypatch.setattr(pool, "close", lambda force=False: closed.append(force))
+
+    def open_pool(settings: object, **kw: object) -> FakePool:
+        opened.append(kw)
+        return pool
+
+    monkeypatch.setattr(entry, "open_pool", open_pool)
+    monkeypatch.setattr(pool, "close", lambda timeout=5.0: closed.append(True))
     results = await entry.serve(config)
     assert [(r.target, r.rows) for r in results] == [(t, 3) for t in PurgeTarget]
     assert closed == [True]
-    assert "commit" not in pool.kinds()  # dry run: nada apagado
+    assert not [s for s in executed if s.startswith("DELETE")]  # dry run: nada apagado
+    assert opened[0]["statement_timeout_ms"] == config.purge.call_timeout_ms
+    assert opened[0]["application_name"] == "ohip-purge"
 
 
-@pytest.mark.parametrize(("error", "code"), [(None, 0), (RuntimeError("ORA-01031"), 1)])
+@pytest.mark.parametrize(("error", "code"), [(None, 0), (RuntimeError("42501"), 1)])
 def test_main_exit_codes(
     config: entry.PurgeConfig,
     monkeypatch: pytest.MonkeyPatch,

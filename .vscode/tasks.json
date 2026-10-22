@@ -22,15 +22,28 @@
     { "label": "make typecheck (mypy)", "type": "shell", "command": "make typecheck", "problemMatcher": [] },
     { "label": "make imports (camadas)", "type": "shell", "command": "make imports", "problemMatcher": [] },
     {
-      "label": "make test-integration (Oracle/RabbitMQ/Redis de teste)",
-      "detail": "Precisa de TEST_*_URL/TEST_ORACLE_* e das flags TEST_*_DISPOSABLE=sim (RUNBOOK). Nunca homologação/produção.",
+      "label": "make test-integration (PostgreSQL/RabbitMQ/Redis de teste)",
+      "detail": "Precisa de TEST_POSTGRES_DSN/TEST_*_URL e das flags TEST_*_DISPOSABLE=sim (RUNBOOK). Nunca homologação/produção.",
       "type": "shell",
       "command": "make test-integration",
       "problemMatcher": []
     },
     {
+      "label": "make test-db (PostgreSQL descartável em contêiner)",
+      "detail": "Cria o contêiner, aplica sql/postgres/ e grava .test-db.env (ADR-0021 §9). Remover: make test-db-down.",
+      "type": "shell",
+      "command": "make test-db",
+      "problemMatcher": []
+    },
+    {
+      "label": "make test-postgres (cenários contra o PostgreSQL do test-db)",
+      "type": "shell",
+      "command": "make test-postgres",
+      "problemMatcher": []
+    },
+    {
       "label": "make test-load (carga do consumer, RNF-13)",
-      "detail": "Servidor OHIP simulado + Oracle simulado; ~2 min. LOAD_* ajustam (tests/load/).",
+      "detail": "Servidor OHIP simulado + banco simulado; ~2 min. LOAD_* ajustam (tests/load/).",
       "type": "shell",
       "command": "make test-load",
       "problemMatcher": []
@@ -44,7 +57,7 @@
     {
       "label": "Cobertura em HTML (htmlcov/)",
       "type": "shell",
-      "command": "PYTHONPATH=src .venv/bin/pytest -m 'not oracle and not rabbitmq and not redis and not load' --cov --cov-report=html -q && open htmlcov/index.html",
+      "command": "PYTHONPATH=src .venv/bin/pytest -m 'not postgres and not rabbitmq and not redis and not load' --cov --cov-report=html -q && open htmlcov/index.html",
       "problemMatcher": []
     }
   ]

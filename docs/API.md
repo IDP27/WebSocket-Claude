@@ -7,8 +7,8 @@
 - Base: `/api/v1`, atrás do Nginx (TLS). `/health`, `/ready` e `/metrics` ficam na raiz e só são expostos na rede interna (Nginx bloqueia de fora).
 - Autenticação: `Authorization: Bearer <token de serviço>`. Tokens configurados por ambiente como **hash SHA-256** (nunca em texto puro), cada um com perfil `read` ou `admin`.
 - Auditoria: ações `admin` exigem o header `X-Actor` (usuário final repassado pelo `ohip-admin`, vindo do SSO/Nginx). Gravado em `requested_by` / `resolved_by`. O `ohip-admin` usa o token `read` ou `admin` conforme o grupo do usuário (ADR-0004).
-- Rotas que tocam o Oracle são `def` (síncronas, threadpool do FastAPI) — ADR-0003.
-- Paginação no banco com `ROWNUM` (11g): `?limit=` (padrão 50, máx. 200) e `?cursor=` (último `id` visto; paginação por chave, sem `OFFSET`).
+- Rotas que tocam o banco são `def` (síncronas, threadpool do FastAPI) — ADR-0017, ADR-0021.
+- Paginação no banco com `LIMIT`: `?limit=` (padrão 50, máx. 200) e `?cursor=` (último `id` visto; paginação por chave, sem `OFFSET`).
 - Listas paginadas respondem `{"items": [...], "next_cursor": <id ou null>}`; `next_cursor` é o `cursor` da próxima página. Ordem: `id` decrescente.
 - `from`/`to` de `/events` filtram `received_at` (`from` inclusive, `to` exclusive); data sem fuso é UTC. `event_name` é normalizado (maiúsculas, espaços simples) e `module_name` compara sem diferenciar maiúsculas.
 - `/docs`, `/redoc` e `/openapi.json` só fora de produção (`APP_ENVIRONMENT=producao` desliga).
@@ -27,7 +27,7 @@
 | Método | Rota | Perfil | Descrição |
 | --- | --- | --- | --- |
 | GET | `/health` | interno | Processo de pé (liveness). Não toca dependências. |
-| GET | `/ready` | interno | Oracle, Redis e RabbitMQ acessíveis (readiness). 503 se algum falhar, com detalhe por dependência. |
+| GET | `/ready` | interno | PostgreSQL, Redis e RabbitMQ acessíveis (readiness; chaves `postgres`, `redis`, `rabbitmq`, ADR-0021). 503 se algum falhar, com detalhe por dependência. |
 | GET | `/metrics` | interno | Formato Prometheus (lista em ARCHITECTURE §10). Cache de 5 s. |
 | GET | `/api/v1/status` | read | Estado por chain: `state`, último offset, `last_message_at`, atraso, reconexões, último código de fechamento, pendentes na outbox, DLQ aberta. |
 | GET | `/api/v1/events` | read | Filtros: `chain_code`, `hotel_id`, `event_name`, `module_name`, `primary_key`, `from`, `to`, `processing_status`. |
@@ -84,7 +84,7 @@ Regras:
 - `from_offset` casa com `^[0-9]+$` e tem até 20 caracteres.
 - `from_offset` **não pode ser maior** que o último offset confirmado da chain (um replay "para frente" pularia eventos). Rejeita com 422 `REPLAY_FORWARD_NOT_ALLOWED`.
 - `confirm` deve repetir o `chain_code` (segunda confirmação, além do modal do painel).
-- No máximo um pedido `PENDING` por chain (índice único no Oracle); senão 409.
+- No máximo um pedido `PENDING` por chain (índice único parcial no banco); senão 409.
 - Aviso na resposta se o offset for provavelmente mais antigo que a retenção de 7 dias do OHIP.
 
 Como o consumer aplica o pedido (caso de uso `ApplyReplay`, ARCHITECTURE §4.6):
@@ -128,4 +128,4 @@ Resposta `202` (`warnings` traz o aviso de retenção, quando houver):
 | 409 | `INVALID_STATE` | Item de DLQ já resolvido ou com retry já pedido; item sem a referência necessária; evento `IGNORED` |
 | 422 | `REPLAY_FORWARD_NOT_ALLOWED` | `from_offset` maior que o último offset confirmado |
 | 500 | `INTERNAL_ERROR` | Erro inesperado (detalhe só no log, pelo `request_id`) |
-| 503 | `DEPENDENCY_UNAVAILABLE` | Oracle indisponível |
+| 503 | `DEPENDENCY_UNAVAILABLE` | Banco (PostgreSQL) indisponível |

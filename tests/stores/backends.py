@@ -1,15 +1,15 @@
-"""Backends da suíte de cenários dos stores: o fake em memória e o Oracle de teste.
+"""Backends da suíte de cenários dos stores: o fake em memória e o PostgreSQL de teste.
 
-Os **mesmos cenários** rodam nos dois (PLAN, Fase 3): o fake é o critério de aceitação do
-adapter, e o Oracle prova que o adapter cumpre esse contrato de verdade.
+Os **mesmos cenários** rodam nos dois (PLAN, Fases 3 e 11): o fake é o critério de aceitação
+do adapter, e o PostgreSQL prova que o adapter cumpre esse contrato de verdade.
 
-Oracle de teste — travas de segurança (CLAUDE.md: nunca DDL em banco real):
-- só roda com ``TEST_ORACLE_DSN``/``TEST_ORACLE_USER``/``TEST_ORACLE_PASSWORD`` **e**
-  ``TEST_ORACLE_DISPOSABLE_SCHEMA=sim`` (o schema é descartável, criado pelo DBA com os
-  scripts de ``sql/``); ``TEST_ORACLE_CLIENT_LIB_DIR`` opcional;
+PostgreSQL de teste — travas de segurança (CLAUDE.md: DDL nunca em banco existente):
+- só roda com ``TEST_POSTGRES_DSN`` **e** ``TEST_POSTGRES_DISPOSABLE=sim``. O ``make test-db``
+  cria um contêiner descartável, aplica ``sql/postgres/`` nele e grava as variáveis em
+  ``.test-db.env`` (ADR-0021 §9);
 - os testes **não rodam DDL**; só DML nas linhas das chains ``ZZT...``, apagadas e semeadas
   de novo antes de cada teste;
-- antes de qualquer DML, recusa o schema se houver chain que não seja ``ZZT...`` em
+- antes de qualquer DML, recusa o banco se houver chain que não seja ``ZZT...`` em
   OHIP_OFFSET/OHIP_OUTBOX ou lease ``publisher`` ativo com outro dono (proteção contra apontar
   por engano para homologação).
 """
@@ -19,7 +19,6 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, replace
 from datetime import timedelta
-from pathlib import Path
 from typing import Any
 
 from pydantic import SecretStr
@@ -30,21 +29,16 @@ from tests.fakes.memory import (
     MemoryMonitoringStore,
 )
 
-from ohip_streaming.adapters.oracle.database import (
-    DedicatedSession,
-    Pool,
-    PooledSession,
-    open_pool,
-)
-from ohip_streaming.adapters.oracle.enrichment_store import OracleEnrichmentStore
-from ohip_streaming.adapters.oracle.event_store import OracleEventStore
-from ohip_streaming.adapters.oracle.lease_store import OracleLeaseStore
-from ohip_streaming.adapters.oracle.monitoring_store import OracleMonitoringStore
-from ohip_streaming.adapters.oracle.operations_store import OracleOperationsStore
-from ohip_streaming.adapters.oracle.outbox_store import OracleOutboxStore
-from ohip_streaming.adapters.oracle.purge_store import OraclePurgeStore
-from ohip_streaming.adapters.oracle.replay_store import OracleReplayStore
-from ohip_streaming.adapters.oracle.status_store import OracleConsumerStatusStore
+from ohip_streaming.adapters.postgres import database as pg
+from ohip_streaming.adapters.postgres.enrichment_store import PostgresEnrichmentStore
+from ohip_streaming.adapters.postgres.event_store import PostgresEventStore
+from ohip_streaming.adapters.postgres.lease_store import PostgresLeaseStore
+from ohip_streaming.adapters.postgres.monitoring_store import PostgresMonitoringStore
+from ohip_streaming.adapters.postgres.operations_store import PostgresOperationsStore
+from ohip_streaming.adapters.postgres.outbox_store import PostgresOutboxStore
+from ohip_streaming.adapters.postgres.purge_store import PostgresPurgeStore
+from ohip_streaming.adapters.postgres.replay_store import PostgresReplayStore
+from ohip_streaming.adapters.postgres.status_store import PostgresConsumerStatusStore
 from ohip_streaming.application.ports import (
     ConsumerStatusStore,
     EnrichmentStore,
@@ -56,12 +50,11 @@ from ohip_streaming.application.ports import (
     PurgeStore,
     ReplayStore,
 )
-from ohip_streaming.config import OracleSettings
+from ohip_streaming.config import Environment, PostgresSettings
 from ohip_streaming.domain.events import Event
 from ohip_streaming.domain.offset import Offset
 
 TEST_CHAINS = ("ZZT1", "ZZT2")
-_ENV = ("TEST_ORACLE_DSN", "TEST_ORACLE_USER", "TEST_ORACLE_PASSWORD")
 
 
 @dataclass(frozen=True)
@@ -88,6 +81,7 @@ class OutboxView:
 
 class Backend:
     name: str
+    broken_code = "22001"  # código do erro que ``broken`` provoca (valor longo demais)
     events: EventStore
     outbox: OutboxStore
     replay: ReplayStore
@@ -169,7 +163,7 @@ class MemoryBackend(Backend):
         return self.db.leases[lease]
 
     def broken(self, event: Event) -> Event:
-        self.db.row_errors[event.unique_event_id] = ("ORA-12899", "value too large")
+        self.db.row_errors[event.unique_event_id] = ("22001", "value too long")
         return event
 
     def offset(self, chain: str) -> Offset | None:
@@ -203,183 +197,173 @@ class MemoryBackend(Backend):
         return sum(1 for r in self.db.raw.values() if r.event.chain_code == chain)
 
 
-# ======================================================================= Oracle
+# ======================================================================= PostgreSQL
 
 
-_AGE_SQL = (
-    """UPDATE ohip_event_raw SET received_at = received_at - NUMTODSINTERVAL(:days, 'DAY')
- WHERE chain_code = :chain""",
-    """UPDATE ohip_outbox SET created_at = created_at - NUMTODSINTERVAL(:days, 'DAY'),
-       sent_at = sent_at - NUMTODSINTERVAL(:days, 'DAY')
- WHERE chain_code = :chain""",
-    """UPDATE ohip_dlq SET created_at = created_at - NUMTODSINTERVAL(:days, 'DAY'),
-       resolved_at = resolved_at - NUMTODSINTERVAL(:days, 'DAY')
- WHERE chain_code = :chain""",
+_PG_AGE_SQL = (
+    """UPDATE ohip_event_raw SET received_at = received_at - make_interval(days => %(days)s)
+ WHERE chain_code = %(chain)s""",
+    """UPDATE ohip_outbox SET created_at = created_at - make_interval(days => %(days)s),
+       sent_at = sent_at - make_interval(days => %(days)s)
+ WHERE chain_code = %(chain)s""",
+    """UPDATE ohip_dlq SET created_at = created_at - make_interval(days => %(days)s),
+       resolved_at = resolved_at - make_interval(days => %(days)s)
+ WHERE chain_code = %(chain)s""",
 )
-
-_OUTBOX_SQL = """
+_PG_OUTBOX_SQL = """
 SELECT id, unique_event_id, status, exchange_name, attempts
-  FROM ohip_outbox WHERE chain_code = :chain ORDER BY id"""
-
-_DLQ_SQL = """
+  FROM ohip_outbox WHERE chain_code = %(chain)s ORDER BY id"""
+_PG_DLQ_SQL = """
 SELECT id, stage, unique_event_id, offset_value, error_class || ': ' || error_message,
        resolution, attempts, CASE WHEN retry_requested_at IS NULL THEN 0 ELSE 1 END, raw_message
-  FROM ohip_dlq WHERE chain_code = :chain ORDER BY id"""
-
-_CLEANUP = (
-    "DELETE FROM ohip_dlq WHERE chain_code = :chain",
-    "DELETE FROM ohip_outbox WHERE chain_code = :chain",
-    "DELETE FROM ohip_event_raw WHERE chain_code = :chain",
-    "DELETE FROM ohip_replay_request WHERE chain_code = :chain",
-    "DELETE FROM ohip_offset WHERE chain_code = :chain",
-    "DELETE FROM ohip_consumer_status WHERE chain_code = :chain",
-    "DELETE FROM ohip_lease WHERE lease_name = 'consumer:' || :chain",
+  FROM ohip_dlq WHERE chain_code = %(chain)s ORDER BY id"""
+_PG_CLEANUP = (
+    "DELETE FROM ohip_dlq WHERE chain_code = %(chain)s",
+    "DELETE FROM ohip_outbox WHERE chain_code = %(chain)s",
+    "DELETE FROM ohip_event_raw WHERE chain_code = %(chain)s",
+    "DELETE FROM ohip_replay_request WHERE chain_code = %(chain)s",
+    "DELETE FROM ohip_offset WHERE chain_code = %(chain)s",
+    "DELETE FROM ohip_consumer_status WHERE chain_code = %(chain)s",
+    "DELETE FROM ohip_lease WHERE lease_name = 'consumer:' || %(chain)s",
 )
-_SEED = (
+_PG_SEED = (
     "INSERT INTO ohip_lease (lease_name, epoch, expires_at)"
-    " VALUES ('consumer:' || :chain, 0, SYS_EXTRACT_UTC(SYSTIMESTAMP))",
-    "INSERT INTO ohip_offset (chain_code, last_offset) VALUES (:chain, NULL)",
-    "INSERT INTO ohip_consumer_status (chain_code, state) VALUES (:chain, 'STOPPED')",
+    " VALUES ('consumer:' || %(chain)s, 0, statement_timestamp())",
+    "INSERT INTO ohip_offset (chain_code, last_offset) VALUES (%(chain)s, NULL)",
+    "INSERT INTO ohip_consumer_status (chain_code, state) VALUES (%(chain)s, 'STOPPED')",
 )
-
-
-# Dados fora das chains de teste = schema não descartável.
-_FOREIGN_DATA_SQL = """
-SELECT chain_code FROM ohip_offset WHERE chain_code NOT LIKE 'ZZT%'
+_PG_FOREIGN_DATA_SQL = """
+SELECT chain_code FROM ohip_offset WHERE chain_code NOT LIKE 'ZZT%%'
 UNION
-SELECT chain_code FROM ohip_outbox WHERE chain_code NOT LIKE 'ZZT%' AND ROWNUM <= 5"""
-_LIVE_PUBLISHER_SQL = """
+(SELECT chain_code FROM ohip_outbox WHERE chain_code NOT LIKE 'ZZT%%' LIMIT 5)"""
+_PG_LIVE_PUBLISHER_SQL = """
 SELECT 1 FROM ohip_lease
  WHERE lease_name = 'publisher'
-   AND expires_at > SYS_EXTRACT_UTC(SYSTIMESTAMP)
-   AND NVL(owner, '-') <> 'zzt-test'"""
-# O teste vira dono, com prazo já vencido: nunca parece um publisher real em execução.
-_ACQUIRE_SQL = """
+   AND expires_at > statement_timestamp()
+   AND COALESCE(owner, '-') <> 'zzt-test'"""
+_PG_ACQUIRE_SQL = """
 UPDATE ohip_lease
-   SET epoch = epoch + 1, owner = 'zzt-test', expires_at = SYS_EXTRACT_UTC(SYSTIMESTAMP)
- WHERE lease_name = :lease"""
+   SET epoch = epoch + 1, owner = 'zzt-test', expires_at = statement_timestamp()
+ WHERE lease_name = %(lease)s"""
 
 
-def oracle_test_settings() -> OracleSettings | None:
-    if not all(os.environ.get(name) for name in _ENV):
+def postgres_test_settings() -> PostgresSettings | None:
+    dsn = os.environ.get("TEST_POSTGRES_DSN")
+    if not dsn or os.environ.get("TEST_POSTGRES_DISPOSABLE") != "sim":
         return None
-    if os.environ.get("TEST_ORACLE_DISPOSABLE_SCHEMA") != "sim":
-        return None
-    lib_dir = os.environ.get("TEST_ORACLE_CLIENT_LIB_DIR")
-    return OracleSettings(
-        dsn=os.environ["TEST_ORACLE_DSN"],
-        user=os.environ["TEST_ORACLE_USER"],
-        password=SecretStr(os.environ["TEST_ORACLE_PASSWORD"]),
-        client_lib_dir=Path(lib_dir) if lib_dir else None,
+    from psycopg.conninfo import conninfo_to_dict
+
+    parts = conninfo_to_dict(dsn)
+    return PostgresSettings(
+        host=str(parts["host"]),
+        port=int(parts.get("port") or 5432),
+        db=str(parts["dbname"]),
+        user=str(parts["user"]),
+        password=SecretStr(str(parts.get("password") or "")),
+        sslmode=parts.get("sslmode") or "disable",
+        statement_timeout_ms=30_000,
     )
 
 
-class OracleBackend(Backend):
-    name = "oracle"
+class PostgresBackend(Backend):
+    name = "postgres"
 
-    def __init__(self, pool: Pool) -> None:
+    def __init__(self, pool: Any) -> None:
         self.pool = pool
-        self._writer = DedicatedSession(pool, call_timeout_ms=30_000)
-        pooled = PooledSession(pool, call_timeout_ms=30_000)
-        self.events = OracleEventStore(self._writer, exchange_names=EXCHANGES, code_version="test")
-        self.outbox = OracleOutboxStore(pooled, code_version="test")
-        self.replay = OracleReplayStore(pooled)
-        self.operations = OracleOperationsStore(pooled)
-        self.status = OracleConsumerStatusStore(pooled)
-        self.leases = OracleLeaseStore(pooled)
-        self.monitoring = OracleMonitoringStore(pooled)
-        self.enrichment = OracleEnrichmentStore(pooled, code_version="test")
-        self.purge = OraclePurgeStore(pooled)
+        self._writer = pg.DedicatedSession(pool)
+        pooled = pg.PooledSession(pool)
+        self.events = PostgresEventStore(
+            self._writer, exchange_names=EXCHANGES, code_version="test"
+        )
+        self.outbox = PostgresOutboxStore(pooled, code_version="test")
+        self.replay = PostgresReplayStore(pooled)
+        self.operations = PostgresOperationsStore(pooled)
+        self.status = PostgresConsumerStatusStore(pooled)
+        self.leases = PostgresLeaseStore(pooled)
+        self.monitoring = PostgresMonitoringStore(pooled)
+        self.enrichment = PostgresEnrichmentStore(pooled, code_version="test")
+        self.purge = PostgresPurgeStore(pooled)
         self._reset()
 
     @classmethod
-    def open(cls, settings: OracleSettings) -> OracleBackend:
-        return cls(open_pool(settings))
+    def open(cls, settings: PostgresSettings) -> PostgresBackend:
+        return cls(
+            pg.open_pool(
+                settings, environment=Environment.DESENVOLVIMENTO, application_name="ohip-test"
+            )
+        )
 
     def _execute(self, statements: tuple[str, ...] | list[str], **parameters: Any) -> int:
-        connection = self.pool.acquire()
-        try:
+        with self.pool.connection() as connection, connection.transaction():
             cursor = connection.cursor()
             rowcount = 0
             for statement in statements:
                 cursor.execute(statement, parameters)
                 rowcount = cursor.rowcount
-            connection.commit()
             return int(rowcount)
-        finally:
-            self.pool.release(connection)
 
     def _refuse_if_not_disposable(self) -> None:
-        """Recusa um schema com dados reais ou com publisher ativo (ex.: homologação)."""
-        foreign = self.query(_FOREIGN_DATA_SQL)
+        """Recusa um banco com dados reais ou com publisher ativo (ex.: homologação)."""
+        foreign = self.query(_PG_FOREIGN_DATA_SQL)
         if foreign:
             raise RuntimeError(
-                "schema de teste tem chains que não são de teste "
+                "banco de teste tem chains que não são de teste "
                 f"({[row[0] for row in foreign][:5]}): recusado"
             )
-        if self.query(_LIVE_PUBLISHER_SQL):
+        if self.query(_PG_LIVE_PUBLISHER_SQL):
             raise RuntimeError("lease 'publisher' ativo com dono que não é de teste: recusado")
 
     def _reset(self) -> None:
         self._refuse_if_not_disposable()
         for chain in TEST_CHAINS:
-            self._execute(_CLEANUP, chain=chain)
-            self._execute(_SEED, chain=chain)
-        # 'publisher' é semeado pelo provisionamento; os testes só incrementam o epoch.
+            self._execute(_PG_CLEANUP, chain=chain)
+            self._execute(_PG_SEED, chain=chain)
 
     def query(self, statement: str, **parameters: Any) -> list[Any]:
-        connection = self.pool.acquire()
-        try:
-            cursor = connection.cursor()
-            cursor.execute(statement, parameters)
-            return [tuple(_read(v) for v in row) for row in cursor.fetchall()]
-        finally:
-            self.pool.release(connection)
+        with self.pool.connection() as connection:
+            cursor = connection.execute(statement, parameters or None)
+            return [tuple(row) for row in cursor.fetchall()]
 
     def acquire(self, lease: str) -> int:
-        self._execute([_ACQUIRE_SQL], lease=lease)
+        self._execute([_PG_ACQUIRE_SQL], lease=lease)
         return self.epoch(lease)
 
     def age(self, chain: str, days: int) -> None:
-        self._execute(_AGE_SQL, chain=chain, days=days)  # DML no schema descartável
+        self._execute(_PG_AGE_SQL, chain=chain, days=days)  # DML no banco descartável
 
     def epoch(self, lease: str) -> int:
         ((value,),) = self.query(
-            "SELECT epoch FROM ohip_lease WHERE lease_name = :lease", lease=lease
+            "SELECT epoch FROM ohip_lease WHERE lease_name = %(lease)s", lease=lease
         )
         return int(value)
 
     def broken(self, event: Event) -> Event:
-        return replace(event, module_name="M" * 101)  # VARCHAR2(100): ORA-12899 nesta linha
+        return replace(event, module_name="M" * 101)  # varchar(100): 22001 nesta linha
 
     def offset(self, chain: str) -> Offset | None:
         ((value,),) = self.query(
-            "SELECT last_offset FROM ohip_offset WHERE chain_code = :chain", chain=chain
+            "SELECT last_offset FROM ohip_offset WHERE chain_code = %(chain)s", chain=chain
         )
         return Offset(value) if value is not None else None
 
     def outbox_rows(self, chain: str) -> list[OutboxView]:
         return [
             OutboxView(int(r[0]), r[1], r[2], r[3], int(r[4]))
-            for r in self.query(_OUTBOX_SQL, chain=chain)
+            for r in self.query(_PG_OUTBOX_SQL, chain=chain)
         ]
 
     def dlq_items(self, chain: str) -> list[DlqView]:
         return [
             DlqView(int(r[0]), r[1], r[2], r[3], r[4], r[5], int(r[6]), bool(r[7]), r[8])
-            for r in self.query(_DLQ_SQL, chain=chain)
+            for r in self.query(_PG_DLQ_SQL, chain=chain)
         ]
 
     def raw_count(self, chain: str) -> int:
         ((value,),) = self.query(
-            "SELECT COUNT(*) FROM ohip_event_raw WHERE chain_code = :chain", chain=chain
+            "SELECT COUNT(*) FROM ohip_event_raw WHERE chain_code = %(chain)s", chain=chain
         )
         return int(value)
 
     def close(self) -> None:
         self._writer.close()
-        self.pool.close(force=True)
-
-
-def _read(value: Any) -> Any:
-    return value.read() if hasattr(value, "read") else value
+        self.pool.close()

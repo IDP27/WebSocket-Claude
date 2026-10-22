@@ -1,6 +1,6 @@
 """Máscara de dados pessoais (LGPD, RNF-08) e de números de cartão no ``detail`` do evento.
 
-Aplicada em tudo que sai do Oracle: logs, API, export e mensagem da fila (ARCHITECTURE §6, §11).
+Aplicada em tudo que sai do banco: logs, API, export e mensagem da fila (ARCHITECTURE §6, §11).
 
 Regras (padrões tirados dos ``elementName`` do guia Oracle, até a resposta da Q-9):
 1. Módulos "negar por padrão" (``PROFILE``): todo valor é mascarado, exceto elementos de uma
@@ -19,7 +19,7 @@ Regras (padrões tirados dos ``elementName`` do guia Oracle, até a resposta da 
    fidelidade usam Luhn de propósito, e o falso positivo alteraria o bruto e geraria alerta
    falso. Esses valores são mascarados nas saídas pelo nome quando são pessoais.
 
-``scrub_card_numbers_*`` remove números de cartão do que é **gravado** no Oracle (payload do
+``scrub_card_numbers_*`` remove números de cartão do que é **gravado** no banco (payload do
 evento e mensagem da DLQ): o PRD proíbe armazenar dado de cartão (ADR-0011). A limpeza é
 estrutural sempre que o texto é JSON: só valores são examinados (strings, números e estruturas
 aninhadas), nunca os campos de identificação (offset, ids, chaves).

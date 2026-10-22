@@ -1,26 +1,32 @@
-"""Fixture ``backend``: cada cenário roda no fake em memória e, se configurado, no Oracle."""
+"""Fixture ``backend``: cada cenário roda no fake em memória e, se configurado, no PostgreSQL
+de teste (``make test-db``)."""
 
 from __future__ import annotations
 
 from collections.abc import Iterator
 
 import pytest
-from tests.stores.backends import Backend, MemoryBackend, OracleBackend, oracle_test_settings
+from tests.stores.backends import (
+    Backend,
+    MemoryBackend,
+    PostgresBackend,
+    postgres_test_settings,
+)
 
-_oracle_settings = oracle_test_settings()
+_postgres_settings = postgres_test_settings()
 
 
 @pytest.fixture(
     params=[
         "memory",
         pytest.param(
-            "oracle",
+            "postgres",
             marks=[
-                pytest.mark.oracle,
+                pytest.mark.postgres,
                 pytest.mark.skipif(
-                    _oracle_settings is None,
-                    reason="Oracle de teste não configurado (TEST_ORACLE_* e "
-                    "TEST_ORACLE_DISPOSABLE_SCHEMA=sim)",
+                    _postgres_settings is None,
+                    reason="PostgreSQL de teste não configurado (make test-db; "
+                    "TEST_POSTGRES_DSN e TEST_POSTGRES_DISPOSABLE=sim)",
                 ),
             ],
         ),
@@ -30,9 +36,9 @@ def backend(request: pytest.FixtureRequest) -> Iterator[Backend]:
     if request.param == "memory":
         yield MemoryBackend()
         return
-    assert _oracle_settings is not None
-    oracle = OracleBackend.open(_oracle_settings)
+    assert _postgres_settings is not None
+    postgres = PostgresBackend.open(_postgres_settings)
     try:
-        yield oracle
+        yield postgres
     finally:
-        oracle.close()
+        postgres.close()

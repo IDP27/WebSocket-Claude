@@ -4,7 +4,7 @@
   ``ohip.events`` as routing keys configuradas; o exchange é conferido passivamente (quem
   declara é o publisher). Reprocessamentos chegam pelo fanout ``ohip.reprocess``.
 - Uma mensagem por vez; ``ack`` ou ``nack(requeue=True)`` conforme o ``Disposition``.
-- Corpo que não é JSON ou sem ``message_id``: log e ``ack`` (a fonte da verdade é o Oracle).
+- Corpo que não é JSON ou sem ``message_id``: log e ``ack`` (a fonte da verdade é o banco).
 - Broker fora: reconecta com backoff exponencial. Fila com argumentos diferentes ou sem
   permissão: ``BrokerMisconfiguredError`` (exige ação humana).
 - Parada: termina a mensagem em curso e fecha; mensagens sem ``ack`` voltam para a fila.

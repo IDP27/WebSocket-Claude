@@ -33,8 +33,8 @@ Preencha a coluna "Resposta". "Padrão" é o que o código faz hoje; "proposta" 
 ## 4. O que acontece depois da resposta (Fase 9b)
 
 1. Registrar a resposta na Q-1 (`docs/OPEN_QUESTIONS.md`) e conferir os nomes dos eventos no Portal.
-2. **Arquiteto:** ADR das tabelas de domínio (DDL compatível com 11g: `SEQUENCE`, sem `IDENTITY`, identificadores ≤ 30) e das regras; ajuste do `OHIP_EVENT_ALLOWLIST`, `ENRICHER_BINDINGS` e `OHIP_MODULE_CODES`.
-3. **DBA:** aplica o novo `sql/004_*.sql` (o projeto não roda DDL em banco real).
+2. **Arquiteto:** ADR das tabelas de domínio (DDL PostgreSQL em `sql/postgres/`, com `UNIQUE` na chave natural para o `ON CONFLICT`, ADR-0022 §5) e das regras; ajuste do `OHIP_EVENT_ALLOWLIST`, `ENRICHER_BINDINGS` e `OHIP_MODULE_CODES`.
+3. **DBA:** aplica o novo `sql/postgres/004_*.sql` (o projeto não roda DDL em banco real).
 4. **Engenheiro:** uma `NormalizationRule` por evento em `build_rules()` (`src/ohip_streaming/entrypoints/enricher.py`), com testes; se a resposta 5 for "sim", copiar as specs REST que faltarem pelo `scripts/sync_oracle_api_docs.sh` (ADR-0012).
 5. Revisor → aprovação humana → deploy.
 

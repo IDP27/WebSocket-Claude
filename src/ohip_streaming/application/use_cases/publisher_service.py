@@ -1,6 +1,6 @@
 """Laço do processo ``ohip-publisher`` (ADR-0002, ADR-0016, ARCHITECTURE §4.2).
 
-- Um publisher ativo por ambiente: lease ``publisher`` no Oracle (ADR-0008); toda marcação de
+- Um publisher ativo por ambiente: lease ``publisher`` no banco (ADR-0008); toda marcação de
   linha passa pela barreira desse epoch.
 - A cada rodada: chains com ``PENDING`` → cada chain publica a cabeça da sua fila
   (``PublishOutbox``: uma mensagem por vez, esperando o confirm), até
@@ -145,7 +145,7 @@ class PublisherService:
             return self._broker_backoff(broker_down)
         self._broker_failures = 0
         if store_down and not sent:
-            return o.store_backoff_s  # banco fora: não gira em laço consultando o Oracle
+            return o.store_backoff_s  # banco fora: não gira em laço consultando o banco
         return 0.0 if sent else self._idle_wait(self._clock.now())
 
     def _broker_backoff(self, error: BaseException) -> float:

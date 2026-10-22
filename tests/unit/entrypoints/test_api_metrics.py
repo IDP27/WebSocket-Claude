@@ -77,7 +77,7 @@ def test_process_counters_and_escaping() -> None:
     assert 'ohip_events_total{chain_code="C1",process="consumer",instance="vm\\"1\\\\x"} 5' in text
     for dropped in ("nome inválido", "ohip_x_total", "ohip_y_total", "ohip_z_total"):
         assert dropped not in text
-    assert 'ohip_metrics_source_up{source="oracle"} 0' in text
+    assert 'ohip_metrics_source_up{source="postgres"} 0' in text
     assert 'ohip_metrics_source_up{source="redis"} 1' in text
 
 

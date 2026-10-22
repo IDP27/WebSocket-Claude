@@ -1,1 +1,1 @@
-"""Implementações dos ports: OHIP WebSocket/REST, Oracle, Redis, RabbitMQ."""
+"""Implementações dos ports: OHIP WebSocket/REST, PostgreSQL, Redis, RabbitMQ."""

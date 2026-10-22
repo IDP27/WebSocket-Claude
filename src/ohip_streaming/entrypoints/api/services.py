@@ -1,6 +1,6 @@
 """Serviços que as rotas usam, montados uma vez por worker (ADR-0017).
 
-Em produção, ``app.compose`` monta com Oracle, Redis e RabbitMQ; os testes montam com os
+Em produção, ``app.compose`` monta com PostgreSQL, Redis e RabbitMQ; os testes montam com os
 fakes em memória.
 """
 
@@ -147,7 +147,7 @@ class MetricsService:
         try:
             status = run_sync(self._monitoring.status())
         except Exception:
-            log.warning("metricas_oracle_indisponivel", exc_info=True)
+            log.warning("metricas_banco_indisponivel", exc_info=True)
             status = None
         processes: list[ProcessSnapshot] | None
         try:

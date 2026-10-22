@@ -2,6 +2,7 @@
 
 - Status: Proposto (Fase 7)
 - Data: 2026-10-05
+- Alteração (2026-10-21, ADR-0021): banco PostgreSQL. `API_ORACLE_CALL_TIMEOUT_MS` virou `API_DB_STATEMENT_TIMEOUT_MS` (prazo do pool da API); a chave da dependência no `/ready` e o rótulo da fonte em `ohip_metrics_source_up` passaram de `oracle` para `postgres`; paginação com `LIMIT`.
 
 ## Contexto
 

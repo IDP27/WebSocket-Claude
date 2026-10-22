@@ -4,7 +4,7 @@ Uso (systemd, Fase 10): ``python -m ohip_streaming.entrypoints.consumer``. A cha
 ``OHIP_CHAIN_CODE``. SIGTERM/SIGINT: ``complete`` → drena → grava a desconexão → libera o
 lease → sai (ADR-0007, ADR-0008).
 
-Composição: Oracle (escrita dedicada de 1 thread + sessão de controle), Redis (token
+Composição: PostgreSQL (escrita dedicada de 1 thread + sessão de controle), Redis (token
 compartilhado, dedup rápido, métricas), OAuth (httpx) e WebSocket (websockets).
 """
 
@@ -20,11 +20,11 @@ import httpx
 
 from ohip_streaming.adapters.ohip_rest.oauth import OhipTokenIssuer, credentials_from_settings
 from ohip_streaming.adapters.ohip_ws.client import WebsocketsConnector
-from ohip_streaming.adapters.oracle.database import DedicatedSession, PooledSession, open_pool
-from ohip_streaming.adapters.oracle.event_store import OracleEventStore
-from ohip_streaming.adapters.oracle.lease_store import OracleLeaseStore
-from ohip_streaming.adapters.oracle.replay_store import OracleReplayStore
-from ohip_streaming.adapters.oracle.status_store import OracleConsumerStatusStore
+from ohip_streaming.adapters.postgres.database import DedicatedSession, PooledSession, open_pool
+from ohip_streaming.adapters.postgres.event_store import PostgresEventStore
+from ohip_streaming.adapters.postgres.lease_store import PostgresLeaseStore
+from ohip_streaming.adapters.postgres.replay_store import PostgresReplayStore
+from ohip_streaming.adapters.postgres.status_store import PostgresConsumerStatusStore
 from ohip_streaming.adapters.redis.caches import RedisSeenCache, RedisTokenCache
 from ohip_streaming.adapters.redis.client import open_redis
 from ohip_streaming.adapters.redis.metrics import (
@@ -49,7 +49,7 @@ from ohip_streaming.config import (
     ConsumerSettings,
     LeaseSettings,
     OhipSettings,
-    OracleSettings,
+    PostgresSettings,
     RabbitMQSettings,
     RedisSettings,
     load_settings,
@@ -69,7 +69,7 @@ OAUTH_TIMEOUT_S = 10.0
 class ConsumerConfig:
     app: AppSettings
     ohip: OhipSettings
-    oracle: OracleSettings
+    db: PostgresSettings
     redis: RedisSettings
     consumer: ConsumerSettings
     lease: LeaseSettings
@@ -80,7 +80,7 @@ class ConsumerConfig:
         return cls(
             app=load_settings(AppSettings),
             ohip=load_settings(OhipSettings),
-            oracle=load_settings(OracleSettings),
+            db=load_settings(PostgresSettings),
             redis=load_settings(RedisSettings),
             consumer=load_settings(ConsumerSettings),
             lease=load_settings(LeaseSettings),
@@ -145,18 +145,22 @@ async def compose(config: ConsumerConfig) -> AsyncIterator[ChainConsumer]:
     clock = SystemClock()
     metrics = InMemoryMetrics()
     preregister(metrics, alert_counters(o.chain_code))
-    pool = open_pool(config.oracle)
-    writer = DedicatedSession(pool, call_timeout_ms=config.oracle.call_timeout_ms)
-    control = PooledSession(pool, call_timeout_ms=config.oracle.call_timeout_ms)
+    pool = open_pool(
+        config.db,
+        environment=config.app.environment,
+        application_name=f"ohip-consumer-{o.chain_code}",
+    )
+    writer = DedicatedSession(pool)
+    control = PooledSession(pool)
     redis = open_redis(config.redis)
     http = httpx.AsyncClient(timeout=OAUTH_TIMEOUT_S)
     try:
-        events = OracleEventStore(
+        events = PostgresEventStore(
             writer,
             exchange_names=exchange_names(config.rabbitmq),
             code_version=config.app.code_version,
         )
-        replay = OracleReplayStore(control)
+        replay = PostgresReplayStore(control)
         seen = RedisSeenCache(redis, ttl_s=config.redis.seen_ttl_s)
         batch_options = BatchOptions(
             allowlist=frozenset(o.event_allowlist),
@@ -172,7 +176,7 @@ async def compose(config: ConsumerConfig) -> AsyncIterator[ChainConsumer]:
             margin_s=o.token_refresh_margin_s,
         )
         lease = LeaseKeeper(
-            store=OracleLeaseStore(control),
+            store=PostgresLeaseStore(control),
             clock=clock,
             metrics=metrics,
             lease_name=f"consumer:{o.chain_code}",
@@ -193,7 +197,7 @@ async def compose(config: ConsumerConfig) -> AsyncIterator[ChainConsumer]:
             retry_dlq=RetryConsumeDlq(store=events, seen=seen, clock=clock, options=batch_options),
             replay_store=replay,
             apply_replay=ApplyReplay(store=replay),
-            status=OracleConsumerStatusStore(control),
+            status=PostgresConsumerStatusStore(control),
             clock=clock,
             metrics=metrics,
             app_key=o.app_key.get_secret_value(),
@@ -210,7 +214,7 @@ async def compose(config: ConsumerConfig) -> AsyncIterator[ChainConsumer]:
         writer.close()
         await http.aclose()
         await redis.aclose()
-        pool.close(force=True)
+        pool.close()
 
 
 async def serve(config: ConsumerConfig) -> None:

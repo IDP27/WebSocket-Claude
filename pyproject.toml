@@ -1,7 +1,7 @@
 [project]
 name = "ohip-streaming"
 version = "0.1.0"
-description = "Consumidor de eventos OHIP Streaming (OPERA Cloud) com gravação no Oracle 11g e publicação via outbox no RabbitMQ"
+description = "Consumidor de eventos OHIP Streaming (OPERA Cloud) com gravação no PostgreSQL e publicação via outbox no RabbitMQ"
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
 authors = [{ name = "Time de Dados" }]
@@ -12,11 +12,11 @@ dependencies = [
     "gunicorn (>=26.2.0,<27.0.0)",
     "websockets (>=17.1,<18.0)",
     "httpx (>=0.28.1,<0.29.0)",
-    "oracledb (>=26.0.1,<27.0.0)",
     "aio-pika (>=10.1.0,<11.0.0)",
     "redis (>=8.1.0,<9.0.0)",
     "pydantic-settings (>=2.15.0,<3.0.0)",
     "structlog (>=26.1.0,<27.0.0)",
+    "psycopg[binary,pool] (>=3.2,<4.0)",
 ]
 
 [project.scripts]
@@ -101,7 +101,7 @@ pythonpath = ["src", "."]
 asyncio_mode = "auto"
 addopts = ["--strict-markers", "--strict-config", "-ra"]
 markers = [
-    "oracle: precisa de um Oracle 11g de teste (ORACLE_* no ambiente)",
+    "postgres: precisa de um PostgreSQL de teste (TEST_POSTGRES_DSN e TEST_POSTGRES_DISPOSABLE=sim; make test-db)",
     "rabbitmq: precisa de um RabbitMQ de teste",
     "redis: precisa de um Redis de teste",
     "load: teste de carga contra o servidor OHIP simulado",

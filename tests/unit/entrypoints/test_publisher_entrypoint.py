@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-from tests.fakes.oracle_driver import FakeOracle
+from tests.fakes.postgres_driver import FakePool
 from tests.unit.adapters.test_redis_adapters import FakeRedis
 from tests.unit.test_config import set_env
 
@@ -14,9 +14,10 @@ from ohip_streaming.config import load_settings
 from ohip_streaming.entrypoints import publisher as entry
 
 ENV = {
-    "ORACLE_DSN": "db:1521/svc",
-    "ORACLE_USER": "ohip_app",
-    "ORACLE_PASSWORD": "senha",
+    "POSTGRES_HOST": "db",
+    "POSTGRES_DB": "ohip",
+    "POSTGRES_USER": "ohip_app",
+    "POSTGRES_PASSWORD": "senha",
     "REDIS_URL": "redis://:senha@localhost:6379/0",
     "RABBITMQ_URL": "amqps://u:senha@broker/vhost",
     "RABBITMQ_PUBLISH_MAX_ATTEMPTS": "7",
@@ -45,12 +46,12 @@ async def test_compose_builds_and_closes(
         async def aclose(self) -> None:
             closed.append("redis")
 
-    pool = FakeOracle()
-    monkeypatch.setattr(entry, "open_pool", lambda settings: pool)
+    pool = FakePool()
+    monkeypatch.setattr(entry, "open_pool", lambda settings, **kw: pool)
     monkeypatch.setattr(entry, "open_redis", lambda settings: ClosingRedis())
-    monkeypatch.setattr(pool, "close", lambda force=False: closed.append("oracle"))
+    monkeypatch.setattr(pool, "close", lambda timeout=5.0: closed.append("postgres"))
     async with entry.compose(config) as service:
         assert isinstance(service, PublisherService)
         lease: Any = service._lease
         assert lease._name == "publisher"
-    assert closed == ["redis", "oracle"]
+    assert closed == ["redis", "postgres"]

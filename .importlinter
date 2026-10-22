@@ -21,7 +21,8 @@ source_modules =
     ohip_streaming.domain
     ohip_streaming.application
 forbidden_modules =
-    oracledb
+    psycopg
+    psycopg_pool
     websockets
     fastapi
     flask
@@ -53,11 +54,12 @@ type = forbidden
 source_modules =
     ohip_streaming.entrypoints.admin
 forbidden_modules =
-    ohip_streaming.adapters.oracle
+    ohip_streaming.adapters.postgres
     ohip_streaming.adapters.redis
-    oracledb
+    psycopg
+    psycopg_pool
     redis
-    ; o painel terá configuração própria (URL da API e tokens) e nunca carrega OracleSettings
+    ; o painel tem configuração própria (URL da API e tokens) e nunca carrega PostgresSettings
     ohip_streaming.config
 
 [importlinter:contract:api-e-painel-independentes]

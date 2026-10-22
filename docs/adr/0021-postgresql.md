@@ -49,7 +49,7 @@ Os ports continuam `async`, e o adapter roda o driver síncrono em executor, com
   - o `timeout` do pool substitui o `wait_timeout`;
   - estouro dos dois = banco indisponível, como hoje.
 - Isolamento `READ COMMITTED` (padrão do PostgreSQL, igual ao Oracle). A barreira de epoch (ADR-0008) funciona igual: um `UPDATE ... WHERE epoch = %s` que concorre com quem incrementou o epoch reavalia a condição na versão nova da linha e afeta 0 linhas.
-- **TLS** (RNF-07): `POSTGRES_SSLMODE`, padrão `verify-full`. `disable` só é aceito com `APP_ENVIRONMENT=desenvolvimento`.
+- **TLS** (RNF-07): `POSTGRES_SSLMODE`, padrão `verify-full`. Fora de `APP_ENVIRONMENT=desenvolvimento`, só `verify-full` ou `verify-ca` são aceitos: `allow`/`prefer` caem para texto puro sem avisar e `require` não confere o certificado (achado da revisão do Engenheiro).
 
 ### 4. Tradução de SQL
 
@@ -112,7 +112,7 @@ Substitui a lista de `ORA-` (ADR-0013 §3) em `adapters/postgres/errors.py`:
 
 O PostgreSQL recusa o caractere `\x00` em `text`/`varchar` (`22021`). Uma mensagem bruta inválida com NUL iria para a DLQ e derrubaria a gravação da própria DLQ, levando o lote inteiro. Por isso:
 - todo texto livre gravado pelo adapter (`raw_message`, `error_message`, `stack_trace`, `last_error`, motivos) troca `\x00` por `U+FFFD`;
-- o payload do evento não é alterado. Com NUL, ele falha como linha e vai para a DLQ (ADR-0022), onde é gravado com a troca.
+- o payload do evento não é alterado. Com NUL, ele falha como linha e vai para a DLQ (ADR-0022), onde é gravado com a troca. **Confirmado na implementação:** quem recusa o NUL é o próprio psycopg, antes de enviar (`DataError` sem SQLSTATE), e não o servidor (`22021`); o adapter trata os dois como erro de dado da linha.
 - **Surrogate isolado** (ex.: `"\ud800"` vindo do JSON) falha na codificação **do lado do cliente** (`UnicodeEncodeError`, sem SQLSTATE):
   - no texto livre, recebe a mesma troca por `U+FFFD`;
   - num campo do evento, o adapter trata `UnicodeEncodeError` como erro de dado da linha (ADR-0022 §1): caminho lento e DLQ, nunca envenenamento da conexão;
@@ -164,6 +164,22 @@ Grupo `POSTGRES_` no lugar de `ORACLE_`:
 
 - `.importlinter`: `psycopg` e `psycopg_pool` entram na lista proibida para `domain`/`application` e para o `ohip-admin` (ADR-0004), no lugar de `oracledb`.
 - O pacote `adapters/oracle` vira `adapters/postgres`.
+
+## Resultado da implementação (2026-10-21)
+
+- `adapters/postgres/` substituiu `adapters/oracle/`, que foi removido junto com `sql/001`–`003`/`900`, `oracledb`, `OracleSettings` (`ORACLE_*`), `API_ORACLE_CALL_TIMEOUT_MS` e o marcador `oracle`.
+- **Contrato da API e das métricas:** a chave da dependência no `/ready` e o rótulo `source` de `ohip_metrics_source_up` passaram de `oracle` para `postgres` (o nome antigo seria enganoso). A regra de alerta usa `ohip_metrics_source_up == 0` sem filtrar o rótulo, então não muda.
+- O expurgo usa `PURGE_CALL_TIMEOUT_MS` como `statement_timeout` do seu pool (`open_pool(..., statement_timeout_ms=...)`); a API usa `API_DB_STATEMENT_TIMEOUT_MS` no pool de cada worker.
+- **Testes:**
+  - os 19 cenários de contrato de `tests/stores/` passam no fake e no PostgreSQL 16 do contêiner (`make test-db` + `make test-postgres`);
+  - 21 testes só de banco real (`tests/stores/test_postgres_only.py`): classificação de 9 SQLSTATE e do `statement_timeout`, nenhuma transação aberta depois de leitura ou escrita, os testes 2, 4 e 5 do ADR-0022, as duas corridas reais (retry de DLQ e zumbi na barreira) e o uso de índice no `/status` e no expurgo (`EXPLAIN` com `enable_seqscan = off`);
+  - unitários com driver falso (`tests/fakes/postgres_driver.py`) para sessões, transação, classificação e os dois caminhos do lote, inclusive o teste 3 do ADR-0022.
+- **Carga** (latência medida no contêiner: lote de 200 com p95 de 26 ms no caminho rápido e 202 ms no lento): sustentado a 10× com p95 de 0,27 s (Fase 10, com Oracle simulado: 0,46 s); rajada a ~2 170 eventos/s; no pior caso, com todo lote no caminho lento, p95 de 0,26 s no sustentado e ~660 eventos/s na rajada.
+- No caminho lento, o psycopg registra o aviso `error ignored terminating Pipeline` ao sair do pipeline abortado. É esperado e documentado no RUNBOOK.
+- O `make check` não depende de banco (marcador `postgres` fora de `UNIT_MARKERS`). Os stores têm unitários com o driver falso (`test_pg_stores.py`: SQL, mapeamento de erros, barreira e o `merge_sql` do enricher); o banco real prova o resto.
+- **`ON CONFLICT` do enricher executado antes da Q-1:** um teste cria uma tabela **TEMP** (some com a sessão) e roda o `INSERT ... ON CONFLICT DO UPDATE ... WHERE` contra o banco real. Só roda com `TEST_POSTGRES_LOCAL_CONTAINER=sim`, que só o `make test-db` grava: nunca num banco da empresa.
+- **Inventário `''` × `NULL`** (§4): os opcionais do evento chegam normalizados pelo domínio (vazio → `None`); os opcionais gravados pelo adapter já viram `NULL` quando vazios (`last_close_reason`, `unique_event_id`/`offset_value` da DLQ); os demais textos gravados são obrigatórios. Nenhuma conversão extra foi necessária.
+- **PgBouncer** (Q-18): em modo transação ele recusa as opções de conexão (`TimeZone`, `statement_timeout`) e o preparo automático de comandos do psycopg; se houver, ajustar a conexão antes de ligar.
 
 ## Consequências
 

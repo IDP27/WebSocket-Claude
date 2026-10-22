@@ -10,7 +10,7 @@
   app key, tokens ou o ``detail`` com dados pessoais, e o ``repr`` delas escapa da máscara.
   O traceback vira dado/texto antes da máscara, que então também cobre a mensagem da exceção.
 - Dados pessoais do ``detail`` são mascarados no domínio (LGPD), não aqui.
-- Código síncrono em threads (Oracle, ADR-0003) deve rodar via ``run_in_executor`` deste
+- Código síncrono em threads (banco PostgreSQL, ADR-0021) deve rodar via ``run_in_executor`` deste
   módulo, que leva o contexto de correlação para a thread.
 """
 
@@ -188,7 +188,7 @@ async def run_in_executor(
 ) -> R:
     """Como ``loop.run_in_executor``, mas levando o contexto de correlação para a thread.
 
-    ``loop.run_in_executor`` não copia contextvars; sem isso, os logs do adapter Oracle
+    ``loop.run_in_executor`` não copia contextvars; sem isso, os logs do adapter do banco
     perderiam ``unique_event_id``/``chain_code`` (RF-13).
     """
     context = contextvars.copy_context()

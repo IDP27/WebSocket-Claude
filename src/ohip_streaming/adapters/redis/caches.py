@@ -42,7 +42,7 @@ class RedisLike(Protocol):
 
 
 class RedisSeenCache:
-    """``SeenCache`` (ADR-0009): atalho; o UNIQUE do Oracle é quem garante."""
+    """``SeenCache`` (ADR-0009): atalho; o UNIQUE do banco é quem garante."""
 
     def __init__(self, redis: RedisLike, *, ttl_s: int) -> None:
         self._redis = redis

@@ -128,7 +128,7 @@ def health() -> Health:
 
 @internal.get("/ready", response_model=Ready, responses={503: {"model": Ready}})
 def ready(app: Services) -> JSONResponse:
-    """Oracle, Redis e RabbitMQ acessíveis (readiness)."""
+    """PostgreSQL, Redis e RabbitMQ acessíveis (readiness)."""
     result = app.ready.get()
     return JSONResponse(result.model_dump(), status_code=200 if result.status == "ok" else 503)
 

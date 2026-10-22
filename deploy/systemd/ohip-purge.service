@@ -1,5 +1,5 @@
 # Expurgo por retenção (ADR-0020 §2), disparado por ohip-purge.timer. Arquivo de ambiente
-# só dele, com ORACLE_USER=ohip_purge (SELECT/DELETE nas três tabelas). PURGE_DRY_RUN=true
+# só dele, com POSTGRES_USER=ohip_purge (SELECT/DELETE nas três tabelas). PURGE_DRY_RUN=true
 # (padrão) só conta: confira as contagens no journal antes de pôr false.
 [Unit]
 Description=OHIP Streaming - expurgo por retenção
@@ -21,7 +21,7 @@ TimeoutStartSec=4500
 KillSignal=SIGTERM
 Nice=10
 IOSchedulingClass=idle
-# Endurecimento (ADR-0020 §4). O Instant Client grava trace em $HOME (StateDirectory).
+# Endurecimento (ADR-0020 §4). Só $HOME (StateDirectory) é gravável.
 NoNewPrivileges=yes
 PrivateTmp=yes
 PrivateDevices=yes

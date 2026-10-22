@@ -20,7 +20,7 @@ from ohip_streaming.config import (
     LeaseSettings,
     LogSettings,
     OhipSettings,
-    OracleSettings,
+    PostgresSettings,
     RabbitMQSettings,
     RedisSettings,
     load_settings,
@@ -197,17 +197,27 @@ def test_app_settings_defaults() -> None:
     assert settings.code_version == "dev"
 
 
-def test_oracle_settings(monkeypatch: pytest.MonkeyPatch) -> None:
-    set_env(monkeypatch, ORACLE_DSN="db:1521/svc", ORACLE_USER="ohip_app", ORACLE_PASSWORD="pwd")
-    settings = OracleSettings()
-
-    assert settings.client_lib_dir is None
+def test_postgres_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    set_env(
+        monkeypatch,
+        POSTGRES_HOST="db",
+        POSTGRES_DB="ohip",
+        POSTGRES_USER="ohip_app",
+        POSTGRES_PASSWORD="pwd",
+    )
+    settings = PostgresSettings()
+    assert (settings.port, settings.sslmode, settings.sslrootcert) == (5432, "verify-full", None)
+    assert (settings.pool_min, settings.pool_max) == (1, 4)
+    assert (settings.pool_wait_timeout_ms, settings.statement_timeout_ms) == (10_000, 60_000)
     assert "pwd" not in repr(settings)
-
-    monkeypatch.setenv("ORACLE_POOL_MIN", "5")
-    monkeypatch.setenv("ORACLE_POOL_MAX", "2")
-    with pytest.raises(ValidationError, match="pool_max"):
-        OracleSettings()
+    monkeypatch.setenv("POSTGRES_SSLMODE", "nenhum")
+    with pytest.raises(ValidationError):
+        PostgresSettings()
+    monkeypatch.setenv("POSTGRES_SSLMODE", "disable")
+    monkeypatch.setenv("POSTGRES_POOL_MIN", "5")
+    monkeypatch.setenv("POSTGRES_POOL_MAX", "2")
+    with pytest.raises(ValidationError):
+        PostgresSettings()
 
 
 def test_rabbitmq_settings(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -323,6 +333,7 @@ def test_api_settings_defaults() -> None:
     settings = ApiSettings()
     assert (settings.host, settings.port, settings.workers) == ("127.0.0.1", 8080, 2)
     assert (settings.metrics_cache_s, settings.ready_cache_s) == (5.0, 5.0)
+    assert settings.db_statement_timeout_ms == 15_000
 
 
 def test_ohip_routing_settings_need_no_credentials(monkeypatch: pytest.MonkeyPatch) -> None:

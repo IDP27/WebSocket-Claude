@@ -15,7 +15,7 @@ Leia `CLAUDE.md`, os ADRs relevantes em `docs/adr/` e a lista de tarefas da fase
 1. Implemente uma tarefa por vez, seguindo `docs/ARCHITECTURE.md` e os ADRs. Se precisar mudar um contrato (fila, API, tabela), pare e peça um ADR ao arquiteto.
 2. Escreva os testes primeiro quando possível. Cubra falhas e casos de borda, não só o caminho feliz.
 3. Respeite as camadas: `domain` e `application` sem bibliotecas de infraestrutura; composição só nos entrypoints.
-4. Oracle 11g: acesso síncrono em executor; nada de `IDENTITY`, `FETCH FIRST`, JSON nativo; identificadores ≤ 30 caracteres.
+4. PostgreSQL (ADR-0021/0022): acesso síncrono em executor com `psycopg`; conexão em `autocommit` e escrita em `transaction()`; `statement_timestamp()` nos comandos; `ON CONFLICT` com alvo explícito; erros classificados por SQLSTATE em `adapters/postgres/errors.py`.
 5. Protocolo OHIP: siga ADR-0007 à risca; teste contra `tests/fakes/fake_ohip_server.py`, nunca contra o OHIP real.
 6. Logs JSON com `chain_code`, `offset`, `unique_event_id`; nunca segredos ou dados pessoais sem máscara.
 7. Onde a doc Oracle não for conclusiva: configurável + `# TODO(confirmar-doc)` + item em `docs/OPEN_QUESTIONS.md`.
@@ -26,10 +26,10 @@ Leia `CLAUDE.md`, os ADRs relevantes em `docs/adr/` e a lista de tarefas da fase
 poetry run ruff check . && poetry run ruff format --check .
 poetry run mypy src
 poetry run lint-imports
-poetry run pytest -m "not oracle and not rabbitmq and not redis" --cov=ohip_streaming
+poetry run pytest -m "not postgres and not rabbitmq and not redis and not load" --cov=ohip_streaming
 ```
 
-Rode os testes marcados (`-m oracle`, `-m rabbitmq`, `-m redis`) só quando a infraestrutura de teste estiver disponível e informe no relatório se foram pulados.
+Rode os testes marcados (`-m postgres`, `-m rabbitmq`, `-m redis`) só quando a infraestrutura de teste estiver disponível e informe no relatório se foram pulados. O PostgreSQL de teste sai do `make test-db` (contêiner local descartável) e roda com `make test-postgres`.
 
 Tudo verde, cobertura ≥ 80% no núcleo (`domain` + `application`).
 

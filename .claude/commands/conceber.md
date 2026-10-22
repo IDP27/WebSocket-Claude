@@ -10,7 +10,7 @@ Use o subagente `arquiteto` para o desenho e, só depois da minha aprovação do
 Roteiro:
 
 1. Entenda o objetivo e o encaixe no PRD e no plano de fases. Liste premissas e perguntas.
-2. Projete antes de codar: componentes, responsabilidades, ports, fluxo de dados, contratos, esquema do banco (Oracle 11g), cache, UI (se houver).
+2. Projete antes de codar: componentes, responsabilidades, ports, fluxo de dados, contratos, esquema do banco (PostgreSQL, ADR-0021), cache, UI (se houver).
 3. Registre decisões relevantes em ADR. Divergências com o PRD ou com a doc Oracle viram itens em `docs/OPEN_QUESTIONS.md`.
 4. Defina o MVP: o menor recorte pronto para produção que não precise ser reconstruído depois.
 5. Pare para aprovação. Depois, implemente com testes e passe pelo `revisor`.

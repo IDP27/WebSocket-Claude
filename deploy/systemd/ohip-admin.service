@@ -1,5 +1,5 @@
 # Painel (ADR-0018): Gunicorn em 127.0.0.1:8081, atrás do Nginx. Só fala com a API: o
-# arquivo de ambiente é só dele, sem ORACLE_*/REDIS_*/RABBITMQ_* (ADR-0004).
+# arquivo de ambiente é só dele, sem POSTGRES_*/REDIS_*/RABBITMQ_* (ADR-0004).
 [Unit]
 Description=OHIP Streaming - painel operacional
 Documentation=file:///opt/ohip-streaming/docs/UI.md
@@ -18,7 +18,7 @@ Restart=always
 RestartSec=5
 KillSignal=SIGTERM
 TimeoutStopSec=30
-# Endurecimento (ADR-0020 §4). O Instant Client grava trace em $HOME (StateDirectory).
+# Endurecimento (ADR-0020 §4). Só $HOME (StateDirectory) é gravável.
 NoNewPrivileges=yes
 PrivateTmp=yes
 PrivateDevices=yes

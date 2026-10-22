@@ -1,4 +1,4 @@
-"""Implementações em memória dos ports, com o mesmo contrato do adapter Oracle (Fase 3).
+"""Implementações em memória dos ports, com o mesmo contrato do adapter do banco (Fases 3 e 11).
 
 Simulam o que importa para os casos de uso: as duas constraints UNIQUE do evento bruto, a
 barreira de epoch (ADR-0008), a atomicidade da transação do lote e a injeção de falhas.

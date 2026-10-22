@@ -40,7 +40,8 @@ caminho lento, linha a linha, na ordem de chegada:
   erro → ROLLBACK TO SAVEPOINT linha e classifica:
     23505 em ohip_event_raw_uq_off       → duplicado (uq_off)
     indisponibilidade (ADR-0021 §5)      → sobe: desfaz o lote inteiro
-    outro (inclusive 23505 na PK e UnicodeEncodeError) → falha da linha → DLQ CONSUME
+    erro de dado (classes 22/23, inclusive 23505 na PK; UnicodeEncodeError) → falha da linha → DLQ CONSUME
+    outro erro (ex.: 42xxx)                → BatchFailedError (bisseção e disjuntor, ADR-0009/0011)
 ```
 
 No código, os savepoints são blocos `with conn.transaction():` aninhados dentro da transação do lote. As conexões têm `autocommit=True` (ADR-0021 §3).
@@ -91,7 +92,7 @@ Depois dos eventos, a ordem é a mesma de hoje (ADR-0013 §5):
 
 1. **Os mesmos cenários de `tests/stores/`**, no fake e no PostgreSQL de teste. Incluem duplicado pelas duas constraints, falha por linha na DLQ, retry de DLQ e barreira de epoch.
 2. **Lote misto no banco real:** gravado, duplicado `uq_evt`, duplicado `uq_off`, linha longa demais (`22001`), linha com NUL no payload (`22021`) e linha com surrogate isolado (`UnicodeEncodeError`).
-   - Esperado: os dois duplicados em `BatchResult.duplicates`, com a constraint de cada um no log; as três falhas na DLQ, com `raw_message` sem NUL nem surrogate; os outros eventos e a outbox gravados.
+   - Esperado: os dois duplicados em `BatchResult.duplicates` (o de `uq_off` também no log `evento_duplicado_por_offset`, com a constraint, por ser o caso raro da D-6); as três falhas na DLQ, com `raw_message` sem NUL nem surrogate; os outros eventos e a outbox gravados.
    - O offset e o `last_unique_event_id` seguem a regra do ADR-0009.
    - A métrica `ohip_duplicates_total` tem só o rótulo `chain_code` (nota no ADR-0009).
 3. **Indisponibilidade no caminho lento:** uma linha com erro da classe `53` desfaz o lote inteiro (driver falso). Nada vai para a DLQ e o offset não avança.

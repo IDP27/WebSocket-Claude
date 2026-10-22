@@ -1,4 +1,4 @@
-"""Lease com prazo e epoch no Oracle (ADR-0008)."""
+"""Lease com prazo e epoch no banco (ADR-0008)."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from typing import Protocol
 
 
 class LeaseStore(Protocol):
-    """OHIP_LEASE no Oracle, sempre com o relógio do banco (ADR-0008)."""
+    """OHIP_LEASE no banco, sempre com o relógio do banco (ADR-0008)."""
 
     async def acquire(self, lease_name: str, owner: str, ttl_s: float) -> int | None:
         """Novo epoch se o lease estava vencido ou já era nosso; None se tem outro dono.

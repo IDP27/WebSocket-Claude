@@ -1,7 +1,7 @@
 """Tratamento de cada mensagem da fila do enricher (ARCHITECTURE §4.3, ADR-0019).
 
 - Sucesso → ``ACK``.
-- Falha de infraestrutura (Oracle ou REST fora, 429): não conta tentativa; espera com backoff
+- Falha de infraestrutura (banco ou REST fora, 429): não conta tentativa; espera com backoff
   exponencial com a mensagem ainda sem ``ack`` e devolve à fila (``REQUEUE``).
 - Falha da mensagem: até ``max_attempts`` tentativas; esgotou → DLQ ``NORMALIZE``/``ENRICH``
   e ``FAILED`` no bruto, ``message_id`` marcado e ``ACK``. Nenhuma mensagem é perdida: se nem a

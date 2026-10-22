@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 from pydantic import ValidationError
-from tests.fakes.oracle_driver import FakeOracle
+from tests.fakes.postgres_driver import FakePool
 from tests.unit.adapters.test_redis_adapters import FakeRedis
 from tests.unit.test_config import OHIP_MIN_ENV, set_env
 
@@ -17,9 +17,10 @@ from ohip_streaming.config import EnricherSettings, load_settings
 from ohip_streaming.entrypoints import enricher as entry
 
 ENV = {
-    "ORACLE_DSN": "db:1521/svc",
-    "ORACLE_USER": "ohip_app",
-    "ORACLE_PASSWORD": "senha",
+    "POSTGRES_HOST": "db",
+    "POSTGRES_DB": "ohip",
+    "POSTGRES_USER": "ohip_app",
+    "POSTGRES_PASSWORD": "senha",
     "REDIS_URL": "redis://:senha@localhost:6379/0",
     "RABBITMQ_URL": "amqps://u:senha@broker/vhost",
     "ENRICHER_BINDINGS": "ohip.rsv.#, ohip.crm.*",
@@ -69,10 +70,10 @@ async def compose_and_check(
         async def aclose(self) -> None:
             closed.append("redis")
 
-    pool = FakeOracle()
-    monkeypatch.setattr(entry, "open_pool", lambda settings: pool)
+    pool = FakePool()
+    monkeypatch.setattr(entry, "open_pool", lambda settings, **kw: pool)
     monkeypatch.setattr(entry, "open_redis", lambda settings: ClosingRedis())
-    monkeypatch.setattr(pool, "close", lambda force=False: closed.append("oracle"))
+    monkeypatch.setattr(pool, "close", lambda timeout=5.0: closed.append("postgres"))
     async with entry.compose(config) as runtime:
         assert isinstance(runtime.consumer, AioPikaQueueConsumer)
         fetcher = runtime.service._enrich._fetcher
@@ -84,7 +85,7 @@ async def test_compose_without_rest(
 ) -> None:
     fetcher, closed = await compose_and_check(config, monkeypatch)
     assert isinstance(fetcher, entry.DisabledFetcher)
-    assert closed == ["redis", "oracle"]
+    assert closed == ["redis", "postgres"]
 
 
 async def test_compose_with_rest(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -92,7 +93,7 @@ async def test_compose_with_rest(monkeypatch: pytest.MonkeyPatch) -> None:
     load_settings.cache_clear()
     fetcher, closed = await compose_and_check(entry.EnricherConfig.load(), monkeypatch)
     assert isinstance(fetcher, OhipResourceFetcher)
-    assert closed == ["redis", "oracle"]
+    assert closed == ["redis", "postgres"]
 
 
 async def test_serve_runs_the_consumer_with_the_service_stop(
@@ -107,8 +108,8 @@ async def test_serve_runs_the_consumer_with_the_service_stop(
         async def aclose(self) -> None:
             return None
 
-    pool = FakeOracle()
-    monkeypatch.setattr(entry, "open_pool", lambda settings: pool)
+    pool = FakePool()
+    monkeypatch.setattr(entry, "open_pool", lambda settings, **kw: pool)
     monkeypatch.setattr(entry, "open_redis", lambda settings: ClosableRedis())
     monkeypatch.setattr(AioPikaQueueConsumer, "run", run)
     await entry.serve(config)

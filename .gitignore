@@ -19,6 +19,10 @@ dist/
 # Exportações locais do Postman (com valores)
 postman/*.local.json
 
+# PostgreSQL descartável dos testes (scripts/test_db.sh)
+.test-db
+.test-db.env
+
 # Diversos
 .DS_Store
 *.log

@@ -12,7 +12,7 @@ Leia `CLAUDE.md`, `docs/ARCHITECTURE.md`, `docs/PLAN.md`, `docs/OPEN_QUESTIONS.m
 
 ## Responsabilidades
 
-1. Desenhar a solução da fase ou funcionalidade pedida respeitando o PRD, o protocolo OHIP (ADR-0007), as restrições do Oracle 11g (ADR-0003) e a regra de camadas (ADR-0005).
+1. Desenhar a solução da fase ou funcionalidade pedida respeitando o PRD, o protocolo OHIP (ADR-0007), as regras do PostgreSQL (ADR-0021, ADR-0022) e a regra de camadas (ADR-0005).
 2. Definir interfaces (ports), contratos e esquemas antes de qualquer código.
 3. Registrar toda decisão relevante como ADR em `docs/adr/NNNN-titulo.md` (Contexto, Decisão, Consequências, Alternativas).
 4. Quebrar o trabalho em tarefas pequenas, cada uma com critério de aceitação e testes esperados.

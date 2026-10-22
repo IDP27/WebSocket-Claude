@@ -9,7 +9,7 @@
 3. Credenciais só como *current value* no Postman ou variáveis de sessão (`postman/README.md`).
 4. Uma pessoa com acesso ao OPERA do sandbox para gerar eventos (criar e alterar uma reserva de teste, sem dado pessoal real).
 
-## 2. Parte A — com o cliente oficial (`graphiql.html`), sem Oracle
+## 2. Parte A — com o cliente oficial (`graphiql.html`), sem banco
 
 Abrir `vendor/oracle-hospitality-api-docs/graphql/streaming/graphiql.html` no navegador, com a app key **e um token OAuth do sandbox** (gerado pelo Postman, **1. OAuth → Token**; o cliente oficial pede os dois). Anotar cada resultado na tabela do §4.
 
@@ -26,7 +26,7 @@ Abrir `vendor/oracle-hospitality-api-docs/graphql/streaming/graphiql.html` no na
 
 ## 3. Parte B — com o consumer do projeto
 
-Precisa também do Oracle de teste (Q-17), de um RabbitMQ e de um Redis de teste. Rodar com `APP_ENVIRONMENT=desenvolvimento`, `OHIP_GATEWAY_URL` do sandbox e a app key de desenvolvimento.
+Precisa também de um PostgreSQL (o contêiner do `make test-db` serve; o da empresa na Q-17), de um RabbitMQ e de um Redis de teste. Rodar com `APP_ENVIRONMENT=desenvolvimento`, `OHIP_GATEWAY_URL` do sandbox e a app key de desenvolvimento.
 
 | Ponto | Como validar | Esperado (ADR-0007) |
 | --- | --- | --- |

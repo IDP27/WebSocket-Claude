@@ -19,8 +19,6 @@ Python 3.11+ · Poetry · systemd · FastAPI + Uvicorn · Flask + Gunicorn + Jin
 
 ## PostgreSQL — sempre (ADR-0021)
 
-> **Fase 11 em andamento:** o código ainda usa o adapter Oracle (`adapters/oracle/`, `sql/001`–`003`) até o adapter PostgreSQL ser aprovado. Código novo segue as regras abaixo.
-
 - Acesso **síncrono** com `psycopg` (executor de 1 thread no consumer; rotas FastAPI `def`). Modo assíncrono do driver só com ADR e teste de carga.
 - Sequências explícitas (`reserve_event_ids`); `ohip_outbox_seq` com `CACHE 1` (o cache é por sessão e quebraria a ordem da outbox).
 - Conexões com `autocommit=True`: escrita sempre em `with conn.transaction():` (aninhado = savepoint); leitura fora de transação (nada "idle in transaction").
@@ -51,7 +49,7 @@ Python 3.11+ · Poetry · systemd · FastAPI + Uvicorn · Flask + Gunicorn + Jin
 
 ## Camadas (ADR-0005)
 
-`entrypoints → application → domain`; adapters implementam ports. `domain`/`application` não importam `psycopg`, `psycopg_pool`, `oracledb`, `websockets`, `fastapi`, `flask`, `aio_pika`, `redis`, `httpx`. O `ohip-admin` não importa adapters de banco/Redis (ADR-0004).
+`entrypoints → application → domain`; adapters implementam ports. `domain`/`application` não importam `psycopg`, `psycopg_pool`, `websockets`, `fastapi`, `flask`, `aio_pika`, `redis`, `httpx`. O `ohip-admin` não importa adapters de banco/Redis (ADR-0004).
 
 ## Nunca
 
@@ -76,7 +74,8 @@ Testes unitários e de integração passando (≥ 80% no núcleo) · ruff, mypy 
 ```bash
 make check              # tudo: ruff, mypy strict, import-linter, pytest + cobertura
 make format             # ruff format + correções automáticas
-make test-integration   # testes marcados postgres/oracle/rabbitmq/redis (precisa de infraestrutura)
+make test-integration   # testes marcados postgres/rabbitmq/redis (precisa de infraestrutura)
+make test-db            # PostgreSQL descartável em contêiner (depois: make test-postgres, make test-db-down)
 ```
 
 Configuração: um grupo por prefixo em `src/ohip_streaming/config.py`, carregado com `load_settings(Grupo)` só nos entrypoints. Toda variável nova entra no `.env.example` (há teste). Logs: `get_logger()` e `bind_context(unique_event_id=..., chain_code=..., offset=...)` de `ohip_streaming.logging`.

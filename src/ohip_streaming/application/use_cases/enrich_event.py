@@ -1,7 +1,7 @@
 """Normalização e enriquecimento de um evento vindo da fila (ARCHITECTURE §4.3, RF-08, RF-09).
 
 As regras por ``eventName`` só serão escritas após a Q-1 (Fase 9); aqui ficam o registro de
-regras e o fluxo. O payload sempre vem do Oracle (a mensagem da fila tem ``detail`` mascarado).
+regras e o fluxo. O payload sempre vem do banco (a mensagem da fila tem ``detail`` mascarado).
 """
 
 from __future__ import annotations

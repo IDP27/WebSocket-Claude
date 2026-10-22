@@ -1,11 +1,12 @@
-"""``EnrichmentStore`` no Oracle 11g (ARCHITECTURE §4.3, ADR-0019).
+"""``EnrichmentStore`` no PostgreSQL (ARCHITECTURE §4.3, ADR-0019, ADR-0022 §5).
 
-- ``apply``: numa transação, um ``MERGE`` condicional por escrita e o ``processing_status``.
-  ``WHEN MATCHED`` só atualiza se o evento não for mais antigo (``source_offset_num``): N
-  enrichers em paralelo não sobrescrevem estado novo com antigo, e reprocessar é idempotente.
+- ``apply``: numa transação, um ``INSERT ... ON CONFLICT DO UPDATE`` condicional por escrita e
+  o ``processing_status``. O ``UPDATE`` só acontece se o evento não for mais antigo
+  (``source_offset_num``): N enrichers em paralelo não sobrescrevem estado novo com antigo, e
+  reprocessar é idempotente.
 - Tabela e colunas vêm das regras (código, não entrada externa) e ainda assim são validadas
   antes de entrar no SQL; todo valor vai por bind.
-- Sem lease nem barreira de epoch: a ordem é garantida pela condição do ``MERGE``.
+- Sem lease nem barreira de epoch: a ordem é garantida pela condição do ``ON CONFLICT``.
 """
 
 from __future__ import annotations
@@ -14,9 +15,9 @@ import re
 from collections.abc import Sequence
 from typing import Any, Final
 
-from ohip_streaming.adapters.oracle.database import Cursor, Session, query, transaction
-from ohip_streaming.adapters.oracle.operations_store import EVENT_BY_ID_SQL
-from ohip_streaming.adapters.oracle.rows import (
+from ohip_streaming.adapters.postgres.database import Cursor, Session, query, transaction
+from ohip_streaming.adapters.postgres.operations_store import EVENT_BY_ID_SQL
+from ohip_streaming.adapters.postgres.rows import (
     ERROR_CLASS_BYTES,
     ERROR_MESSAGE_BYTES,
     stored_event_from_row,
@@ -25,40 +26,40 @@ from ohip_streaming.adapters.oracle.rows import (
 from ohip_streaming.application.errors import NotFoundError, StoreOperationError
 from ohip_streaming.application.ports import DlqStage, DomainWrite, ProcessingStatus, StoredEvent
 
-# Identificador do 11g: até 30 caracteres, sem aspas (ARCHITECTURE §5).
-_IDENTIFIER_RE: Final = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,29}$")
+# Identificador sem aspas, até 63 caracteres (limite do PostgreSQL).
+_IDENTIFIER_RE: Final = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,62}$")
 SOURCE_COLUMNS: Final = ("source_event_raw_id", "source_offset_num")
 _ENRICH_STAGES: Final = frozenset({DlqStage.NORMALIZE, DlqStage.ENRICH})
 
 UPDATE_STATUS_SQL = """
 UPDATE ohip_event_raw
-   SET processing_status = :status, updated_at = SYS_EXTRACT_UTC(SYSTIMESTAMP)
- WHERE id = :raw_event_id"""
+   SET processing_status = %(status)s, updated_at = statement_timestamp()
+ WHERE id = %(raw_event_id)s"""
 
 INSERT_DLQ_SQL = """
 INSERT INTO ohip_dlq (
     id, stage, chain_code, event_raw_id, unique_event_id, offset_value, error_class,
     error_message, code_version
 )
-SELECT ohip_dlq_seq.NEXTVAL, :stage, chain_code, id, unique_event_id, offset_value,
-       :error_class, :error_message, :code_version
+SELECT nextval('ohip_dlq_seq'), %(stage)s, chain_code, id, unique_event_id, offset_value,
+       %(error_class)s, %(error_message)s, %(code_version)s
   FROM ohip_event_raw
- WHERE id = :raw_event_id"""
+ WHERE id = %(raw_event_id)s"""
 
 
 def _identifier(name: str) -> str:
     if not _IDENTIFIER_RE.fullmatch(name):
-        raise StoreOperationError(f"identificador inválido para o Oracle 11g: {name!r}")
+        raise StoreOperationError(f"identificador inválido: {name!r}")
     return name.lower()
 
 
 def merge_sql(write: DomainWrite) -> tuple[str, dict[str, Any]]:
-    """``MERGE`` condicional de uma escrita e os seus binds.
+    """``INSERT ... ON CONFLICT DO UPDATE`` condicional de uma escrita e os seus binds.
 
-    Binds numerados (``:k1``, ``:v1``…): o nome da coluna pode ter 30 caracteres, e um bind
-    derivado dele passaria do limite de identificador do 11g (ORA-00972). Chave com ``None``
-    é recusada: ``t.col = NULL`` nunca casa, e o ``MERGE`` inseriria uma linha nova a cada
-    evento (hotel ausente vira ``'#CHAIN'`` na regra, ADR-0019 §4)."""
+    Equivale ao ``MERGE`` condicional do Oracle, mas é atômico com N enrichers em paralelo
+    (ADR-0022 §5). A tabela de domínio precisa de um índice único nas colunas da chave (o ADR
+    dela declara). Chave com ``None`` é recusada: ``NULL`` nunca conflita, e cada evento
+    inseriria uma linha nova (hotel ausente vira ``'#CHAIN'`` na regra, ADR-0019 §4)."""
     table = _identifier(write.table)
     keys = [_identifier(k) for k in write.key]
     values = [_identifier(v) for v in write.values]
@@ -76,32 +77,23 @@ def merge_sql(write: DomainWrite) -> tuple[str, dict[str, Any]]:
     params["source_event_raw_id"] = write.source_event_raw_id
     params["source_offset_num"] = write.source_offset_num
 
-    value_binds = [f":v{i}" for i in range(1, len(values) + 1)]
-    source = ", ".join(f":k{i} AS {k}" for i, k in enumerate(keys, start=1))
-    on = " AND ".join(f"t.{k} = s.{k}" for k in keys)
-    updates = [f"t.{v} = {bind}" for v, bind in zip(values, value_binds, strict=True)] + [
-        "t.source_event_raw_id = :source_event_raw_id",
-        "t.source_offset_num = :source_offset_num",
-    ]
     columns = [*keys, *values, *SOURCE_COLUMNS]
     inserted = [
-        *(f"s.{k}" for k in keys),
-        *value_binds,
-        ":source_event_raw_id",
-        ":source_offset_num",
+        *(f"%(k{i})s" for i in range(1, len(keys) + 1)),
+        *(f"%(v{i})s" for i in range(1, len(values) + 1)),
+        "%(source_event_raw_id)s",
+        "%(source_offset_num)s",
     ]
+    updates = [f"{column} = EXCLUDED.{column}" for column in [*values, *SOURCE_COLUMNS]]
     statement = f"""
-MERGE INTO {table} t
-USING (SELECT {source} FROM dual) s
-   ON ({on})
- WHEN MATCHED THEN UPDATE SET {", ".join(updates)}
-      WHERE t.source_offset_num <= :source_offset_num
- WHEN NOT MATCHED THEN INSERT ({", ".join(columns)})
-      VALUES ({", ".join(inserted)})"""  # noqa: S608 - identificadores validados; valores por bind
+INSERT INTO {table} AS t ({", ".join(columns)})
+VALUES ({", ".join(inserted)})
+ON CONFLICT ({", ".join(keys)}) DO UPDATE SET {", ".join(updates)}
+ WHERE t.source_offset_num <= EXCLUDED.source_offset_num"""  # noqa: S608 - identificadores validados; valores por bind
     return statement, params
 
 
-class OracleEnrichmentStore:
+class PostgresEnrichmentStore:
     """Implementa ``EnrichmentStore``. Use com ``PooledSession`` (executor do enricher)."""
 
     def __init__(self, session: Session, *, code_version: str) -> None:
@@ -125,7 +117,7 @@ class OracleEnrichmentStore:
             skipped = 0
             for statement, params in statements:
                 cursor.execute(statement, params)
-                if cursor.rowcount == 0:  # existe e é mais novo: a condição barrou
+                if cursor.rowcount == 0:  # existe e é mais novo: a condição barrou o UPDATE
                     skipped += 1
             cursor.execute(
                 UPDATE_STATUS_SQL, {"status": status.value, "raw_event_id": raw_event_id}

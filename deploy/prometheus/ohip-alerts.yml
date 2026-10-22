@@ -115,4 +115,4 @@ groups:
         for: 5m
         labels: {severity: critical}
         annotations:
-          summary: "{{ $labels.source }} inacessível pela API (Oracle fora ou Redis fora)"
+          summary: "{{ $labels.source }} inacessível pela API (PostgreSQL fora ou Redis fora)"

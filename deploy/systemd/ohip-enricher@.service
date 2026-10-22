@@ -22,7 +22,7 @@ RestartSec=5
 RestartPreventExitStatus=2
 KillSignal=SIGTERM
 TimeoutStopSec=60
-# Endurecimento (ADR-0020 §4). O Instant Client grava trace em $HOME (StateDirectory).
+# Endurecimento (ADR-0020 §4). Só $HOME (StateDirectory) é gravável.
 NoNewPrivileges=yes
 PrivateTmp=yes
 PrivateDevices=yes

@@ -115,6 +115,6 @@ async def test_stop_interrupts_the_pause_and_ends_cleanly() -> None:
 
 async def test_database_errors_propagate_after_committed_batches() -> None:
     store = ScriptedStore(FakeClock(), dlq=5)
-    store.fail = StoreUnavailableError("ORA-03113")
+    store.fail = StoreUnavailableError("08006")
     with pytest.raises(StoreUnavailableError):
         await purge(store).execute(asyncio.Event())

@@ -35,7 +35,7 @@ class OperationsStore(Protocol):
 
     # Operações de retry: cada uma é **uma transação** condicionada a ``resolution IS NULL``
     # (dois cliques ou duas réplicas da API não duplicam nada). Devolvem None/False se o item
-    # não estava mais aberto. Ordem obrigatória no adapter (Oracle READ COMMITTED):
+    # não estava mais aberto. Ordem obrigatória no adapter (READ COMMITTED):
     #   1. ``UPDATE ohip_dlq ... WHERE id = :id AND resolution IS NULL [AND ...]`` primeiro;
     #      o lock da linha serializa pedidos concorrentes;
     #   2. rowcount = 0 → ROLLBACK e devolve None/False, sem inserir nada;

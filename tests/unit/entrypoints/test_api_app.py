@@ -15,10 +15,10 @@ import pytest
 import structlog
 import uvicorn
 from fastapi.testclient import TestClient
-from tests.fakes.oracle_driver import FakeOracle
+from tests.fakes.postgres_driver import FakePool
 from tests.fakes.redis_sync import FakeSyncRedis
 
-from ohip_streaming.adapters.oracle import monitoring_store as sql
+from ohip_streaming.adapters.postgres import monitoring_store as sql
 from ohip_streaming.application.errors import BrokerUnavailableError
 from ohip_streaming.entrypoints.api import app as app_module
 from ohip_streaming.entrypoints.api import server
@@ -31,9 +31,10 @@ TOKEN = "token-de-teste"
 
 @pytest.fixture(autouse=True)
 def api_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    monkeypatch.setenv("ORACLE_DSN", "localhost/teste")
-    monkeypatch.setenv("ORACLE_USER", "teste")
-    monkeypatch.setenv("ORACLE_PASSWORD", "senha-teste")
+    monkeypatch.setenv("POSTGRES_HOST", "localhost")
+    monkeypatch.setenv("POSTGRES_DB", "teste")
+    monkeypatch.setenv("POSTGRES_USER", "teste")
+    monkeypatch.setenv("POSTGRES_PASSWORD", "senha-teste")
     monkeypatch.setenv("REDIS_URL", "redis://localhost:6379/0")
     monkeypatch.setenv("RABBITMQ_URL", "amqp://u:senha@localhost/v")
     monkeypatch.setenv("API_SERVICE_TOKENS", f'{{"{token_hash(TOKEN)}": "admin"}}')
@@ -52,22 +53,22 @@ def test_config_does_not_need_ohip_credentials() -> None:
     assert config.api.host == "127.0.0.1"
 
 
-def test_compose_wires_oracle_redis_and_broker(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_compose_wires_postgres_redis_and_broker(monkeypatch: pytest.MonkeyPatch) -> None:
     probes: list[tuple[str, float]] = []
 
     async def probe(url: str, *, timeout_s: float) -> None:
         probes.append((url, timeout_s))
 
     monkeypatch.setattr(app_module, "probe_broker", probe)
-    oracle = FakeOracle()
-    services = compose(ApiConfig.load(), oracle, FakeSyncRedis())
+    pool = FakePool()
+    services = compose(ApiConfig.load(), pool, FakeSyncRedis())
     assert services.tokens == {token_hash(TOKEN): Role.ADMIN}
 
     client = TestClient(build_app(services))
     ready = client.get("/ready")
     assert ready.status_code == 200, ready.text
-    assert set(ready.json()["checks"]) == {"oracle", "redis", "rabbitmq"}
-    assert sql.PING_SQL in oracle.statements()
+    assert set(ready.json()["checks"]) == {"postgres", "redis", "rabbitmq"}
+    assert sql.PING_SQL in pool.statements()
     assert probes == [("amqp://u:senha@localhost/v", 10.0)]
 
     async def down(url: str, *, timeout_s: float) -> None:
@@ -80,40 +81,39 @@ def test_compose_wires_oracle_redis_and_broker(monkeypatch: pytest.MonkeyPatch) 
     assert "senha" not in failed.text
 
 
-def test_compose_status_goes_to_oracle_then_cache() -> None:
-    oracle = FakeOracle()
-    oracle.rows(sql.DB_NOW_SQL, [(datetime(2026, 10, 1, 12, tzinfo=UTC).replace(tzinfo=None),)])
+def test_compose_status_goes_to_the_database_then_cache() -> None:
+    pool = FakePool()
+    pool.rows(sql.DB_NOW_SQL, [(datetime(2026, 10, 1, 12, tzinfo=UTC),)])
     redis = FakeSyncRedis()
-    client = TestClient(build_app(compose(ApiConfig.load(), oracle, redis)))
+    client = TestClient(build_app(compose(ApiConfig.load(), pool, redis)))
     headers = {"Authorization": f"Bearer {TOKEN}"}
     first = client.get("/api/v1/status", headers=headers)
     assert first.status_code == 200
     assert redis.data[b"ohip:api:status"] == first.content
-    calls = len(oracle.calls)
+    calls = len(pool.statements())
     assert client.get("/api/v1/status", headers=headers).content == first.content
-    assert len(oracle.calls) == calls  # veio do Redis
+    assert len(pool.statements()) == calls  # veio do Redis
 
 
 def test_create_app_opens_and_closes_resources(monkeypatch: pytest.MonkeyPatch) -> None:
-    oracle = FakeOracle()
     closed: list[str] = []
 
     class Redis(FakeSyncRedis):
         def close(self) -> None:
             closed.append("redis")
 
-    class Pool(FakeOracle):
-        def close(self, force: bool = False) -> None:
-            closed.append(f"pool:{force}")
+    class Pool(FakePool):
+        def close(self, timeout: float = 5.0) -> None:
+            closed.append("pool")
 
     pool = Pool()
-    monkeypatch.setattr(app_module, "open_pool", lambda settings: pool)
+    monkeypatch.setattr(app_module, "open_pool", lambda settings, **kw: pool)
     monkeypatch.setattr(app_module, "open_sync_redis", lambda settings: Redis())
     with TestClient(create_app()) as client:
         assert client.get("/health").status_code == 200
         assert client.app.state.services is not None  # type: ignore[attr-defined]
-    assert closed == ["redis", "pool:True"]
-    assert oracle.calls == []
+    assert closed == ["redis", "pool"]
+    assert pool.statements() == []
 
 
 def test_create_app_warns_without_tokens(
@@ -138,24 +138,19 @@ def test_server_main_runs_uvicorn_factory(monkeypatch: pytest.MonkeyPatch) -> No
     assert options["access_log"] is False
 
 
-def test_api_uses_its_own_oracle_call_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("API_ORACLE_CALL_TIMEOUT_MS", "12000")
-    oracle = FakeOracle()
-    connections: list[Any] = []
-    acquire = oracle.acquire
+def test_api_pool_uses_its_own_statement_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("API_DB_STATEMENT_TIMEOUT_MS", "12000")
+    calls: list[dict[str, Any]] = []
 
-    def recording_acquire() -> Any:
-        connection = acquire()
-        connections.append(connection)
-        return connection
+    def open_pool(settings: Any, **kw: Any) -> FakePool:
+        calls.append(kw)
+        return FakePool()
 
-    monkeypatch.setattr(oracle, "acquire", recording_acquire)
-    services = compose(ApiConfig.load(), oracle, FakeSyncRedis())
-    client = TestClient(build_app(services))
-    response = client.get("/api/v1/replay", headers={"Authorization": f"Bearer {TOKEN}"})
-    assert response.status_code == 200
-    assert connections
-    assert {c.call_timeout for c in connections} == {12_000}  # não o ORACLE_CALL_TIMEOUT_MS
+    monkeypatch.setattr(app_module, "open_pool", open_pool)
+    app_module.open_api_pool(ApiConfig.load())
+    ((kw,),) = [calls]
+    assert kw["statement_timeout_ms"] == 12_000  # não o POSTGRES_STATEMENT_TIMEOUT_MS
+    assert kw["application_name"] == "ohip-api"
 
 
 @pytest.mark.parametrize(("environment", "exposed"), [("producao", False), ("homologacao", True)])
@@ -163,7 +158,7 @@ def test_docs_are_off_in_production(
     monkeypatch: pytest.MonkeyPatch, environment: str, exposed: bool
 ) -> None:
     monkeypatch.setenv("APP_ENVIRONMENT", environment)
-    monkeypatch.setattr(app_module, "open_pool", lambda settings: FakeOracle())
+    monkeypatch.setattr(app_module, "open_pool", lambda settings, **kw: FakePool())
     monkeypatch.setattr(app_module, "open_sync_redis", lambda settings: FakeSyncRedis())
     with TestClient(create_app()) as client:
         for path in ("/docs", "/redoc", "/openapi.json"):

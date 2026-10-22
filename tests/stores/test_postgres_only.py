@@ -1,0 +1,332 @@
+"""Comportamentos que só um PostgreSQL de verdade prova (ADR-0021, ADR-0022 §6).
+
+Rodam contra o contêiner descartável do ``make test-db`` (``make test-postgres``). Sem DDL:
+os erros de recurso vêm de ``RAISE ... USING ERRCODE``, que produz o mesmo SQLSTATE que o
+servidor manda quando o disco enche.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import os
+from collections.abc import Iterator
+from dataclasses import replace
+from typing import Any
+
+import psycopg
+import pytest
+from tests.stores.backends import PostgresBackend, postgres_test_settings
+from tests.stores.test_store_scenarios import CHAIN, batch, event, persist, records, uid
+
+from ohip_streaming.adapters.postgres import database as pg_db
+from ohip_streaming.adapters.postgres.database import query, transaction
+from ohip_streaming.adapters.postgres.enrichment_store import PostgresEnrichmentStore
+from ohip_streaming.adapters.postgres.monitoring_store import RECENT_EVENTS_SQL
+from ohip_streaming.adapters.postgres.purge_store import delete_sql
+from ohip_streaming.application.errors import (
+    BatchFailedError,
+    LeaseLostError,
+    StoreOperationError,
+    StoreUnavailableError,
+)
+from ohip_streaming.application.ports import (
+    DomainWrite,
+    NewEventRecord,
+    ProcessingStatus,
+    PurgeTarget,
+)
+from ohip_streaming.config import Environment
+from ohip_streaming.domain.messages import ExchangeKind, QueueMessage
+
+_settings = postgres_test_settings()
+pytestmark = [
+    pytest.mark.postgres,
+    pytest.mark.skipif(_settings is None, reason="PostgreSQL de teste não configurado"),
+]
+
+RAISE_SQL = "DO $$ BEGIN RAISE EXCEPTION 'teste' USING ERRCODE = '{code}'; END $$"
+
+
+@pytest.fixture
+def pg() -> Iterator[PostgresBackend]:
+    assert _settings is not None
+    backend = PostgresBackend.open(_settings)
+    try:
+        yield backend
+    finally:
+        backend.close()
+
+
+# ------------------------------------------------------------------ classificação
+
+
+@pytest.mark.parametrize(
+    "code", ["53100", "53200", "53300", "57P01", "57014", "40001", "40P01", "25006", "55P03"]
+)
+def test_unavailable_states_from_the_server(pg: PostgresBackend, code: str) -> None:
+    with pg.pool.connection() as connection, pytest.raises(StoreUnavailableError, match=code):
+        transaction(
+            connection,
+            lambda cursor: cursor.execute(RAISE_SQL.format(code=code)),
+            failure=BatchFailedError,
+        )
+
+
+def test_statement_timeout_is_unavailable(pg: PostgresBackend) -> None:
+    def slow(cursor: Any) -> None:
+        cursor.execute("SET LOCAL statement_timeout = 50")
+        cursor.execute("SELECT pg_sleep(1)")
+
+    with pg.pool.connection() as connection, pytest.raises(StoreUnavailableError, match="57014"):
+        transaction(connection, slow, failure=BatchFailedError)
+
+
+def test_other_errors_are_failures(pg: PostgresBackend) -> None:
+    with pg.pool.connection() as connection, pytest.raises(BatchFailedError, match="22012"):
+        transaction(
+            connection,
+            lambda cursor: cursor.execute("SELECT 1/0"),
+            failure=BatchFailedError,
+        )
+
+
+def test_reads_and_writes_leave_no_open_transaction(pg: PostgresBackend) -> None:
+    """ADR-0021 §3: ``autocommit``; nada fica "idle in transaction" depois da chamada."""
+    with pg.pool.connection() as connection:
+        query(connection, "SELECT 1", {}, failure=StoreOperationError)
+        assert connection.info.transaction_status == psycopg.pq.TransactionStatus.IDLE
+        transaction(connection, lambda cursor: cursor.execute("SELECT 1"), failure=BatchFailedError)
+        assert connection.info.transaction_status == psycopg.pq.TransactionStatus.IDLE
+        with pytest.raises(StoreOperationError):
+            transaction(
+                connection, lambda cursor: cursor.execute("SELECT 1/0"), failure=StoreOperationError
+            )
+        assert connection.info.transaction_status == psycopg.pq.TransactionStatus.IDLE
+
+
+# ------------------------------------------------------------------ lote (ADR-0022 §6)
+
+
+async def test_mixed_batch_takes_the_slow_path_and_keeps_every_guarantee(
+    pg: PostgresBackend,
+) -> None:
+    """Teste 2 do ADR-0022: gravado, duplicado ``uq_evt``, duplicado ``uq_off``, texto longo,
+    NUL no payload e surrogate isolado, no mesmo lote."""
+    pg.acquire(f"consumer:{CHAIN}")
+    first = event(1)
+    await persist(pg, first)
+
+    good = event(2)
+    same_uid = first
+    same_offset = event(1, unique_id=uid(901))  # outro uid, mesmo (chain, offset, pk)
+    too_long = replace(event(3), module_name="M" * 101)
+    with_nul = replace(event(4), payload_json=event(4).payload_json + "\x00")
+    with_surrogate = replace(event(5), primary_key="pk\ud800")
+    last = event(6)
+    result = await persist(
+        pg, good, same_uid, same_offset, too_long, with_nul, with_surrogate, last
+    )
+
+    assert result.inserted == (good.unique_event_id, last.unique_event_id)
+    assert set(result.duplicates) == {same_uid.unique_event_id, same_offset.unique_event_id}
+    failed = {f.unique_event_id: f.error_class for f in result.row_failures}
+    assert failed == {
+        too_long.unique_event_id: "22001",
+        with_nul.unique_event_id: "DataError",
+        with_surrogate.unique_event_id: "UnicodeEncodeError",
+    }
+    items = pg.dlq_items(CHAIN)
+    assert sorted(i.unique_event_id or "" for i in items) == sorted(failed)
+    for item in items:  # a DLQ grava sem NUL nem surrogate (ADR-0021 §6)
+        assert item.raw_message is not None
+        assert "\x00" not in item.raw_message
+        item.raw_message.encode("utf-8")
+    outbox = [o.unique_event_id for o in pg.outbox_rows(CHAIN)]
+    assert outbox == [first.unique_event_id, good.unique_event_id, last.unique_event_id]
+    assert str(pg.offset(CHAIN)) == "6"
+
+
+async def test_repeated_primary_key_is_a_row_failure_not_a_duplicate(pg: PostgresBackend) -> None:
+    """``ON CONFLICT`` só no ``uq_evt``: conflito na PK nunca é engolido (ADR-0022 §2)."""
+    pg.acquire(f"consumer:{CHAIN}")
+    first, second = event(1), event(2)
+    (rec1,) = await records(pg, first)
+    (rec2,) = await records(pg, second)
+    clash = NewEventRecord(rec1.raw_event_id, second, rec2.status, rec2.outbox)
+    result = await pg.events.persist_batch(batch(pg, (rec1, clash)))
+
+    assert result.inserted == (first.unique_event_id,)
+    assert result.duplicates == ()
+    (failure,) = result.row_failures
+    assert (failure.unique_event_id, failure.error_class) == (second.unique_event_id, "23505")
+    assert [i.unique_event_id for i in pg.dlq_items(CHAIN)] == [second.unique_event_id]
+
+
+async def test_outbox_ids_follow_write_order_across_sessions(pg: PostgresBackend) -> None:
+    """``CACHE 1`` em ``ohip_outbox_seq``: a API grava entre dois lotes do consumer e os ids
+    seguem a ordem de gravação (ADR-0021 §4, ADR-0022 §4)."""
+    pg.acquire(f"consumer:{CHAIN}")
+    await persist(pg, event(1), event(2))
+    stored = await pg.operations.find_event(uid(1))
+    assert stored is not None
+    message = QueueMessage(
+        kind=ExchangeKind.REPROCESS,
+        routing_key="ohip.rsv.X",
+        message_id=f"reprocess-{uid(1)}",
+        body="{}",
+    )
+    await pg.operations.enqueue(
+        chain_code=CHAIN,
+        raw_event_id=stored.raw_event_id,
+        message=message,
+        exchange_name="ohip.reprocess",
+    )
+    await persist(pg, event(3))
+
+    rows = pg.outbox_rows(CHAIN)
+    assert [r.unique_event_id for r in rows] == [
+        uid(1),
+        uid(2),
+        message.message_id,
+        uid(3),
+    ]
+    assert [r.id for r in rows] == sorted(r.id for r in rows)
+
+
+# ------------------------------------------------------------------ concorrência real
+
+
+async def test_concurrent_retry_publish_inserts_once(pg: PostgresBackend) -> None:
+    """Outra sessão resolve o item enquanto o retry espera o lock: o retry não insere nada."""
+    pg.acquire(f"consumer:{CHAIN}")
+    await persist(pg, event(1))
+    epoch = pg.acquire("publisher")
+    (row,) = await pg.outbox.fetch_head(CHAIN, 1)
+    await pg.outbox.mark_failed(row.id, 10, "esgotado", epoch)
+    (item,) = pg.dlq_items(CHAIN)
+
+    with pg.pool.connection() as rival:
+        with rival.transaction():
+            cursor = rival.execute(
+                "UPDATE ohip_dlq SET resolution = 'RETRIED', resolved_by = 'rival'"
+                " WHERE id = %(id)s AND resolution IS NULL",
+                {"id": item.id},
+            )
+            assert cursor.rowcount == 1  # lock na linha, sem commit ainda
+
+            retry = asyncio.create_task(pg.operations.retry_publish(item.id, row.id, "ana"))
+            await asyncio.sleep(1.0)
+            assert not retry.done()  # esperando o lock do rival
+        assert await asyncio.wait_for(retry, timeout=30) is None
+
+    assert [o.status for o in pg.outbox_rows(CHAIN)] == ["FAILED"]  # nenhuma cópia
+
+
+async def test_zombie_waiting_on_the_fence_loses_after_the_new_owner_commits(
+    pg: PostgresBackend,
+) -> None:
+    """ADR-0008: o novo dono incrementa o epoch (sem commit); a barreira do zumbi espera o
+    lock; depois do commit do rival, o UPDATE do zumbi não acha a linha e tudo é desfeito."""
+    stale = pg.acquire(f"consumer:{CHAIN}")
+    recs = await records(pg, event(1), event(2))
+
+    with pg.pool.connection() as rival:
+        with rival.transaction():
+            rival.execute(
+                "UPDATE ohip_lease SET epoch = epoch + 1 WHERE lease_name = %(n)s",
+                {"n": f"consumer:{CHAIN}"},
+            )
+            zombie = asyncio.create_task(
+                pg.events.persist_batch(batch(pg, recs, lease_epoch=stale))
+            )
+            await asyncio.sleep(1.0)
+            assert not zombie.done()  # parado na barreira, esperando o lock do lease
+        with pytest.raises(LeaseLostError):
+            await asyncio.wait_for(zombie, timeout=30)
+
+    assert pg.raw_count(CHAIN) == 0
+    assert pg.outbox_rows(CHAIN) == []
+    assert pg.offset(CHAIN) is None
+
+
+# ------------------------------------------------------------------ índices (11.2)
+
+
+def _plan(pg: PostgresBackend, statement: str, params: dict[str, Any]) -> str:
+    """Plano com varredura sequencial desligada: prova que o índice **pode** ser usado
+    (com pouco volume o planejador prefere a varredura; volume realista na Q-18)."""
+    with pg.pool.connection() as connection, connection.transaction():
+        connection.execute("SET LOCAL enable_seqscan = off")
+        rows = connection.execute(f"EXPLAIN {statement}", params).fetchall()
+    return "\n".join(row[0] for row in rows)
+
+
+def test_status_window_uses_the_received_at_index(pg: PostgresBackend) -> None:
+    plan = _plan(pg, RECENT_EVENTS_SQL, {})
+    assert "ohip_event_raw_ix_recv" in plan, plan
+
+
+@pytest.mark.parametrize(
+    ("target", "index"),
+    [
+        (PurgeTarget.RAW, "ohip_event_raw_ix_recv"),
+        (PurgeTarget.OUTBOX, "ohip_outbox_ix_sent"),
+        (PurgeTarget.DLQ, "ohip_dlq_ix_open"),
+    ],
+)
+def test_purge_uses_the_date_indexes(pg: PostgresBackend, target: PurgeTarget, index: str) -> None:
+    plan = _plan(pg, delete_sql(target), {"days": 90, "n": 1000})
+    assert index in plan, plan
+
+
+# ------------------------------------------------------------------ enricher (ADR-0022 §5)
+
+
+@pytest.mark.skipif(
+    os.environ.get("TEST_POSTGRES_LOCAL_CONTAINER") != "sim",
+    reason="tabela TEMP só no contêiner criado pelo make test-db",
+)
+async def test_enricher_on_conflict_is_conditional_on_the_offset(pg: PostgresBackend) -> None:
+    """Executa o ``INSERT ... ON CONFLICT DO UPDATE ... WHERE`` do enricher contra o banco
+    real, antes da Q-1, numa tabela TEMP (some com a sessão; só no contêiner do test-db)."""
+    assert _settings is not None
+    pg.acquire(f"consumer:{CHAIN}")
+    await persist(pg, event(1))
+    stored = await pg.operations.find_event(uid(1))
+    assert stored is not None
+    single = pg_db.open_pool(
+        _settings.model_copy(update={"pool_min": 1, "pool_max": 1}),
+        environment=Environment.DESENVOLVIMENTO,
+        application_name="ohip-test-enricher",
+    )
+    try:
+        with single.connection() as connection:
+            connection.execute(
+                "CREATE TEMP TABLE zzt_domain (chain_code varchar(20), hotel_key varchar(50),"
+                " primary_key varchar(100), status varchar(20), source_event_raw_id bigint,"
+                " source_offset_num numeric(20), PRIMARY KEY (chain_code, hotel_key, primary_key))"
+            )
+        store = PostgresEnrichmentStore(pg_db.PooledSession(single), code_version="test")
+
+        def write(status: str, offset: int) -> DomainWrite:
+            return DomainWrite(
+                table="zzt_domain",
+                key={"chain_code": CHAIN, "hotel_key": "#CHAIN", "primary_key": "R1"},
+                values={"status": status},
+                source_event_raw_id=stored.raw_event_id,
+                source_offset_num=offset,
+            )
+
+        raw = stored.raw_event_id
+        assert await store.apply(raw, [write("RESERVED", 100)], ProcessingStatus.NORMALIZED) == 0
+        assert await store.apply(raw, [write("ANTIGO", 50)], ProcessingStatus.NORMALIZED) == 1
+        assert await store.apply(raw, [write("CHECKED IN", 150)], ProcessingStatus.NORMALIZED) == 0
+        assert await store.apply(raw, [write("CHECKED IN", 150)], ProcessingStatus.NORMALIZED) == 0
+        with single.connection() as connection:
+            rows = connection.execute("SELECT status, source_offset_num FROM zzt_domain").fetchall()
+        assert rows == [("CHECKED IN", 150)]  # o antigo não sobrescreveu; reaplicar é idempotente
+    finally:
+        single.close()
+    assert (
+        await pg.operations.get_event(stored.raw_event_id)
+    ).status is ProcessingStatus.NORMALIZED  # type: ignore[union-attr]

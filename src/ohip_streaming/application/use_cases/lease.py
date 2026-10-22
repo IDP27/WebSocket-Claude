@@ -1,4 +1,4 @@
-"""Liderança com prazo e epoch no Oracle (ADR-0008).
+"""Liderança com prazo e epoch no banco (ADR-0008).
 
 ``LeaseKeeper`` adquire o lease, renova a cada ``renew_interval_s`` pela conexão de controle e
 avisa quando o perdeu. O epoch vai em toda transação de escrita (barreira); quem confere de

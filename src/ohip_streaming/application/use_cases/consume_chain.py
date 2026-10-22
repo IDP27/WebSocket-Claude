@@ -402,7 +402,7 @@ class _Session:
                     # ou falha antes de assinar (ADR-0007).
                     with contextlib.suppress(Exception):
                         await self.conn.close()
-                # Depois de fechar: um Oracle lento não atrasa o fechamento do socket.
+                # Depois de fechar: um banco lento não atrasa o fechamento do socket.
                 await self.status.health()
             end = self.end or SessionEnd(EndReason.SERVER_CLOSED, detail="fim sem motivo")
             end.healthy = self._healthy()

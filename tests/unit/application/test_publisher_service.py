@@ -132,7 +132,7 @@ async def test_database_outage_waits_and_retries() -> None:
     async def flaky() -> list[str]:
         calls["n"] += 1
         if calls["n"] == 1:
-            raise StoreUnavailableError("oracle fora")
+            raise StoreUnavailableError("banco fora")
         return await real()
 
     h.db.chains_with_pending = flaky  # type: ignore[method-assign]
@@ -190,7 +190,7 @@ async def test_database_down_during_a_round_does_not_spin(monkeypatch: pytest.Mo
     async def flaky(chain: str, epoch: int) -> Any:
         calls["n"] += 1
         if calls["n"] <= 2:
-            raise StoreUnavailableError("oracle fora")
+            raise StoreUnavailableError("banco fora")
         return await real(chain, epoch)
 
     monkeypatch.setattr(h.service._publish, "publish_chain", flaky)

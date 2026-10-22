@@ -81,7 +81,7 @@ def test_misconfigured_broker_is_not_restarted(name: str) -> None:
 
 
 def test_panel_never_gets_backend_credentials() -> None:
-    # ADR-0004: o painel só fala com a API; nada de ORACLE_*/REDIS_*/RABBITMQ_*.
+    # ADR-0004: o painel só fala com a API; nada de POSTGRES_*/REDIS_*/RABBITMQ_*.
     assert unit(SYSTEMD / "ohip-admin.service")["EnvironmentFile"] == ["/etc/ohip/admin.env"]
 
 

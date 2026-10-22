@@ -4,7 +4,7 @@ As rotas da API rodam em threads do threadpool, cada requisição com o seu ``as
 cliente ``redis.asyncio`` ficaria preso ao event loop em que foi criado. Por isso a API usa o
 cliente síncrono do mesmo pacote.
 
-- ``ohip:api:status``: cache do ``GET /api/v1/status`` (ARCHITECTURE §7), protege o Oracle do
+- ``ohip:api:status``: cache do ``GET /api/v1/status`` (ARCHITECTURE §7), protege o banco do
   polling do painel. Falha do Redis = sem cache (nunca derruba a rota).
 - ``ohip:metrics:<processo>:<instancia>``: snapshots dos contadores dos processos, lidos pelo
   ``/metrics`` a partir do índice ``ohip:metrics_index`` (sem ``SCAN``: o keyspace tem uma

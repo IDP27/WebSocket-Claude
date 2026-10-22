@@ -360,7 +360,7 @@ class ConsumerHarness:
 
 async def test_consume_retry_of_row_failure_writes_event_and_resolves_item() -> None:
     h = ConsumerHarness()
-    h.db.row_errors["uid-2"] = ("DatabaseError", "ORA-12899: valor muito grande")
+    h.db.row_errors["uid-2"] = ("DatabaseError", "22001: valor muito grande")
     await h.consume(frame("1"), frame("2"), frame("3"))
     item = h.only_dlq_item()
     assert item.raw_message is not None
@@ -385,7 +385,7 @@ async def test_consume_retry_of_isolated_culprit_from_bisection() -> None:
 
     def fail(batch: BatchToPersist) -> Exception | None:
         has_uid2 = any(r.event.unique_event_id == "uid-2" for r in batch.events)
-        return BatchFailedError("ORA-00600") if poison["on"] and has_uid2 else None
+        return BatchFailedError("XX000") if poison["on"] and has_uid2 else None
 
     h.db.fail_persist_when = fail
     await h.consume(frame("1"), frame("2"), frame("3"))
@@ -414,11 +414,11 @@ async def test_consume_retry_of_event_that_already_exists_just_resolves() -> Non
 
 async def test_consume_retry_that_still_fails_keeps_item_open_without_new_dlq() -> None:
     h = ConsumerHarness()
-    h.db.row_errors["uid-2"] = ("DatabaseError", "ORA-12899: primeira")
+    h.db.row_errors["uid-2"] = ("DatabaseError", "22001: primeira")
     await h.consume(frame("2"))
     item = h.only_dlq_item()
 
-    h.db.row_errors["uid-2"] = ("DatabaseError", "ORA-12899: segunda")
+    h.db.row_errors["uid-2"] = ("DatabaseError", "22001: segunda")
     await h.api.execute(item.id, "ana")
     assert await h.retry.execute(h.context) == 0
 
@@ -472,14 +472,14 @@ async def test_consume_retry_batch_failure_does_not_stop_other_requests() -> Non
     await h.api.execute(first.id, "ana")
     await h.api.execute(second.id, "ana")
     h.db.fail_persist_when = lambda b: (
-        BatchFailedError("ORA-00600") if b.retry_of_dlq_id == first.id else None
+        BatchFailedError("XX000") if b.retry_of_dlq_id == first.id else None
     )
 
     assert await h.retry.execute(h.context) == 1
 
     assert first.resolution is None
     assert first.attempts == 1
-    assert "ORA-00600" in first.error
+    assert "XX000" in first.error
     assert first.retry_requested_at is None
     assert second.resolution == "RETRIED"
 
@@ -501,7 +501,7 @@ async def test_consume_retry_store_unavailable_propagates() -> None:
     item = h.only_dlq_item()
     h.db.row_errors.clear()
     await h.api.execute(item.id, "ana")
-    h.db.fail_persist = [StoreUnavailableError("oracle fora")]
+    h.db.fail_persist = [StoreUnavailableError("banco fora")]
 
     with pytest.raises(StoreUnavailableError):
         await h.retry.execute(h.context)
@@ -646,7 +646,7 @@ async def test_enrich_apply_is_atomic_and_message_stays_unprocessed_on_failure()
     db = await seeded_db(1)
     raw_id = next(iter(db.raw))
     use_case, dedup, _, _ = enrich(db)
-    db.fail_apply = [StoreUnavailableError("ORA-03113"), RuntimeError("regra quebrada")]
+    db.fail_apply = [StoreUnavailableError("08006"), RuntimeError("regra quebrada")]
 
     with pytest.raises(StoreUnavailableError):  # infraestrutura: sobe como está
         await use_case.execute(message(raw_id))

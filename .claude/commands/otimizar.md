@@ -10,7 +10,7 @@ Use o subagente `otimizador`. Sem medição que mostre o estouro, pare e peça a
 Roteiro:
 
 1. Meça primeiro: teste de carga em `tests/load/` contra o servidor simulado (10× o pico, Q-8), latência p50/p95/p99, eventos/s, memória RSS ao longo do tempo, CPU.
-2. Perfile com `py-spy` e métricas do Oracle (tempo por transação, tamanho do lote).
+2. Perfile com `py-spy` e métricas do banco (tempo por transação, tamanho do lote, `EXPLAIN (ANALYZE, BUFFERS)`).
 3. Procure: gargalos, lógica ineficiente, I/O desnecessário ou em laço, bloqueio do event loop, consultas sem índice, renderização desnecessária no painel (fragmentos HTMX grandes, polling excessivo).
 4. Mude uma coisa por vez, sem afrouxar garantias de dados.
 5. Meça de novo na mesma máquina e rode a suíte completa. Passe pelo `revisor`.

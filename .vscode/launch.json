@@ -1,6 +1,6 @@
 {
   // Depuração. Os processos leem o .env da raiz (copie do .env.example; fora do git).
-  // Use só sandbox OHIP e Oracle/RabbitMQ/Redis de teste.
+  // Use só sandbox OHIP e PostgreSQL/RabbitMQ/Redis de teste (make test-db cria um PostgreSQL local).
   "version": "0.2.0",
   "configurations": [
     {
@@ -18,7 +18,7 @@
       "type": "debugpy",
       "request": "launch",
       "module": "pytest",
-      "args": ["-m", "not oracle and not rabbitmq and not redis and not load", "-x", "-q"],
+      "args": ["-m", "not postgres and not rabbitmq and not redis and not load", "-x", "-q"],
       "envFile": "${workspaceFolder}/.vscode/test.env",
       "cwd": "${workspaceFolder}",
       "justMyCode": false
@@ -34,7 +34,7 @@
       "justMyCode": true
     },
     {
-      "name": "ohip-api (Oracle/Redis de teste)",
+      "name": "ohip-api (PostgreSQL/Redis de teste)",
       "type": "debugpy",
       "request": "launch",
       "module": "uvicorn",
@@ -56,7 +56,7 @@
     },
     {
       // Sem regras até a Q-1: todo evento termina UNMAPPED. REST só com ENRICHER_REST_ENABLED=true.
-      "name": "ohip-enricher (Oracle/RabbitMQ/Redis de teste)",
+      "name": "ohip-enricher (PostgreSQL/RabbitMQ/Redis de teste)",
       "type": "debugpy",
       "request": "launch",
       "module": "ohip_streaming.entrypoints.enricher",
@@ -67,7 +67,7 @@
     },
     {
       // Expurgo: PURGE_DRY_RUN=true (padrão) só conta. Nunca contra homologação/produção.
-      "name": "ohip-purge (dry run, Oracle de teste)",
+      "name": "ohip-purge (dry run, PostgreSQL de teste)",
       "type": "debugpy",
       "request": "launch",
       "module": "ohip_streaming.entrypoints.purge",

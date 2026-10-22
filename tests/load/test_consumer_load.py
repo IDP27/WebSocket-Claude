@@ -1,9 +1,10 @@
 """Teste de carga do consumer (RNF-13, ADR-0020 §3): fora do ``make check``; ``make test-load``.
 
 Consumer real (``ChainConsumer`` + ``WebsocketsConnector``) contra o ``FakeOhipServer`` em
-localhost. O banco é o fake em memória com **latência simulada do Oracle** numa thread única
+localhost. O banco é o fake em memória com **latência simulada do banco** numa thread única
 (como o ``DedicatedSession`` do adapter real): ``LOAD_DB_BATCH_MS`` por lote +
-``LOAD_DB_EVENT_MS`` por evento. A medição com Oracle 11g real entra no checklist da Q-17.
+``LOAD_DB_EVENT_MS`` por evento. Medida no PostgreSQL do contêiner (Fase 11): lote de 200 em
+26 ms (p95) no caminho rápido e 202 ms no lento; no banco de produção, checklist da Q-17.
 
 Latência = envio pelo servidor → commit do lote. Orçamentos: p95 ≤ 5 s no sustentado a 10x o
 pico da Q-8; nenhum evento perdido nem duplicado; memória estável (pico de RSS).
@@ -89,13 +90,13 @@ def rss_mb() -> float:
 
 
 class LoadDatabase(InMemoryDatabase):
-    """Grava com a latência simulada do Oracle e mede envio → commit. Não guarda as linhas
+    """Grava com a latência simulada do banco e mede envio → commit. Não guarda as linhas
     (a memória medida é a do consumer, não a do fake)."""
 
     def __init__(self, server: FakeOhipServer) -> None:
         super().__init__(clock=SystemClock())  # type: ignore[arg-type]
         self.server = server
-        self.executor = ThreadPoolExecutor(1, thread_name_prefix="oracle-simulado")
+        self.executor = ThreadPoolExecutor(1, thread_name_prefix="banco-simulado")
         self.latencies: list[float] = []
         self.committed = 0
         self.duplicates = 0
@@ -113,7 +114,7 @@ class LoadDatabase(InMemoryDatabase):
         self.committed += len(result.inserted)
         self.duplicates += len(result.duplicates)
         self.batches += 1
-        self.raw.clear()  # sem histórico: dedup pelo Oracle não é o que se mede aqui
+        self.raw.clear()  # sem histórico: dedup pelo banco não é o que se mede aqui
         self.outbox.clear()
         self.persisted_batches.clear()
         return result

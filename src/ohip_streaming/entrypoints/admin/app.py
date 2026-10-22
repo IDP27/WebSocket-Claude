@@ -3,7 +3,7 @@
 - Usuário e grupos vêm de headers definidos pelo Nginx/SSO (Q-5); o perfil escolhe o token de
   serviço da API, e o usuário vai em ``X-Actor``.
 - Todo POST é ação ``admin``: perfil e CSRF conferidos no servidor antes de chamar a API.
-- Sem acesso ao Oracle nem ao Redis: tudo passa pela API (import-linter).
+- Sem acesso ao banco nem ao Redis: tudo passa pela API (import-linter).
 
 Montagem (``build_app``/``create_app``); identidade, erros, templates e rotas ficam em
 módulos próprios (refatoração 7 do /entender)."""

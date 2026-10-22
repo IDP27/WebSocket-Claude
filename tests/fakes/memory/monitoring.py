@@ -31,7 +31,7 @@ from tests.fakes.memory.rows import DlqRecord, OutboxRecord, RawRow
 
 
 def _percentile_cont(values: Sequence[float], fraction: float) -> float | None:
-    """Mesma interpolação do ``PERCENTILE_CONT`` do Oracle."""
+    """Mesma interpolação do ``percentile_cont`` do banco."""
     if not values:
         return None
     ordered = sorted(values)
@@ -51,7 +51,7 @@ def _page(items: Sequence[Any], page: PageRequest, key: Callable[[Any], int]) ->
 
 
 class MemoryMonitoringStore:
-    """``MonitoringStore`` sobre o ``InMemoryDatabase`` (mesmo contrato do adapter Oracle)."""
+    """``MonitoringStore`` sobre o ``InMemoryDatabase`` (mesmo contrato do adapter do banco)."""
 
     def __init__(self, db: InMemoryDatabase) -> None:
         self.db = db

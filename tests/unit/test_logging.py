@@ -240,7 +240,7 @@ async def test_run_in_executor_keeps_correlation_context(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     configure()
-    log = get_logger("oracle")
+    log = get_logger("banco")
 
     def write_batch(size: int) -> int:
         log.info("lote_gravado", size=size)

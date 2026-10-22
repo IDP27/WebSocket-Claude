@@ -1,4 +1,4 @@
-"""``OutboxStore`` no Oracle: cabeça da fila por chain e marcações do publisher (ADR-0002).
+"""``OutboxStore`` no PostgreSQL: cabeça da fila por chain e marcações do publisher (ADR-0002).
 
 Toda marcação termina com a barreira de epoch do lease ``publisher`` (ADR-0008). As
 atualizações são condicionadas a ``status = 'PENDING'``: uma linha que já saiu da fila não é
@@ -10,10 +10,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from datetime import datetime
 
-import oracledb
-
-from ohip_streaming.adapters.oracle.database import Cursor, Session, fence, query, transaction
-from ohip_streaming.adapters.oracle.rows import (
+from ohip_streaming.adapters.postgres.database import Cursor, Session, fence, query, transaction
+from ohip_streaming.adapters.postgres.rows import (
     ERROR_MESSAGE_BYTES,
     from_db_required,
     to_db,
@@ -33,30 +31,28 @@ SELECT DISTINCT chain_code FROM ohip_outbox WHERE status = 'PENDING' ORDER BY ch
 FETCH_HEAD_SQL = """
 SELECT id, chain_code, exchange_name, routing_key, unique_event_id, message, schema_version,
        attempts, next_attempt_at
-  FROM (SELECT id, chain_code, exchange_name, routing_key, unique_event_id, message,
-               schema_version, attempts, next_attempt_at
-          FROM ohip_outbox
-         WHERE chain_code = :chain_code
-           AND status = 'PENDING'
-         ORDER BY id)
- WHERE ROWNUM <= :limit"""
+  FROM ohip_outbox
+ WHERE chain_code = %(chain_code)s
+   AND status = 'PENDING'
+ ORDER BY id
+ LIMIT %(limit)s"""
 
 MARK_SENT_SQL = """
 UPDATE ohip_outbox
-   SET status = 'SENT', sent_at = SYS_EXTRACT_UTC(SYSTIMESTAMP)
- WHERE id = :id
+   SET status = 'SENT', sent_at = statement_timestamp()
+ WHERE id = %(id)s
    AND status = 'PENDING'"""
 
 RECORD_FAILURE_SQL = """
 UPDATE ohip_outbox
-   SET attempts = :attempts, next_attempt_at = :next_attempt_at, last_error = :last_error
- WHERE id = :id
+   SET attempts = %(attempts)s, next_attempt_at = %(next_attempt_at)s, last_error = %(last_error)s
+ WHERE id = %(id)s
    AND status = 'PENDING'"""
 
 MARK_FAILED_SQL = """
 UPDATE ohip_outbox
-   SET status = 'FAILED', attempts = :attempts, last_error = :last_error
- WHERE id = :id
+   SET status = 'FAILED', attempts = %(attempts)s, last_error = %(last_error)s
+ WHERE id = %(id)s
    AND status = 'PENDING'"""
 
 INSERT_DLQ_PUBLISH_SQL = """
@@ -64,15 +60,15 @@ INSERT INTO ohip_dlq (
     id, stage, chain_code, event_raw_id, outbox_id, unique_event_id, error_class,
     error_message, code_version
 )
-SELECT ohip_dlq_seq.NEXTVAL, 'PUBLISH', chain_code, event_raw_id, id, unique_event_id,
-       :error_class, :error_message, :code_version
+SELECT nextval('ohip_dlq_seq'), 'PUBLISH', chain_code, event_raw_id, id, unique_event_id,
+       %(error_class)s, %(error_message)s, %(code_version)s
   FROM ohip_outbox
- WHERE id = :outbox_id"""
+ WHERE id = %(outbox_id)s"""
 
 PUBLISH_ERROR_CLASS = "PUBLISH_FAILED"
 
 
-class OracleOutboxStore:
+class PostgresOutboxStore:
     """Implementa ``OutboxStore``. Use com uma ``PooledSession``."""
 
     def __init__(self, session: Session, *, code_version: str) -> None:
@@ -133,7 +129,6 @@ class OracleOutboxStore:
         self, row_id: int, attempts: int, next_attempt_at: datetime, error: str, lease_epoch: int
     ) -> None:
         def body(cursor: Cursor) -> None:
-            cursor.setinputsizes(next_attempt_at=oracledb.DB_TYPE_TIMESTAMP)  # com fração
             cursor.execute(
                 RECORD_FAILURE_SQL,
                 {

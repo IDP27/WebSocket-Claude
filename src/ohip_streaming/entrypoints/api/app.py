@@ -3,7 +3,7 @@
 - ``build_app(services)``: a app com rotas, erros e middleware; os testes passam serviços com
   fakes.
 - ``create_app()``: fábrica do Uvicorn em produção. Carrega a configuração e, no lifespan,
-  abre o pool Oracle e o Redis do worker e monta os serviços (``compose``).
+  abre o pool do PostgreSQL e o Redis do worker e monta os serviços (``compose``).
 """
 
 from __future__ import annotations
@@ -15,10 +15,10 @@ from typing import Any
 
 from fastapi import FastAPI
 
-from ohip_streaming.adapters.oracle.database import InlineSession, Pool, PooledSession, open_pool
-from ohip_streaming.adapters.oracle.monitoring_store import OracleMonitoringStore
-from ohip_streaming.adapters.oracle.operations_store import OracleOperationsStore
-from ohip_streaming.adapters.oracle.replay_store import OracleReplayStore
+from ohip_streaming.adapters.postgres.database import InlineSession, Pool, PooledSession, open_pool
+from ohip_streaming.adapters.postgres.monitoring_store import PostgresMonitoringStore
+from ohip_streaming.adapters.postgres.operations_store import PostgresOperationsStore
+from ohip_streaming.adapters.postgres.replay_store import PostgresReplayStore
 from ohip_streaming.adapters.rabbitmq.probe import probe_broker
 from ohip_streaming.adapters.redis.api_cache import RedisApiCache, open_sync_redis
 from ohip_streaming.adapters.system import SystemClock
@@ -35,7 +35,7 @@ from ohip_streaming.config import (
     Environment,
     LogSettings,
     OhipRoutingSettings,
-    OracleSettings,
+    PostgresSettings,
     RabbitMQSettings,
     RedisSettings,
     load_settings,
@@ -94,7 +94,7 @@ def build_app(
 class ApiConfig:
     app: AppSettings
     api: ApiSettings
-    oracle: OracleSettings
+    db: PostgresSettings
     redis: RedisSettings
     rabbitmq: RabbitMQSettings
     routing: OhipRoutingSettings
@@ -104,20 +104,31 @@ class ApiConfig:
         return cls(
             app=load_settings(AppSettings),
             api=load_settings(ApiSettings),
-            oracle=load_settings(OracleSettings),
+            db=load_settings(PostgresSettings),
             redis=load_settings(RedisSettings),
             rabbitmq=load_settings(RabbitMQSettings),
             routing=load_settings(OhipRoutingSettings),
         )
 
 
+def open_api_pool(config: ApiConfig) -> Pool:
+    """Pool do worker com o prazo da API, menor que o do consumer: uma busca cara não segura
+    uma conexão do pool (``POSTGRES_POOL_MAX`` por worker) por muito tempo (ADR-0017)."""
+    return open_pool(
+        config.db,
+        environment=config.app.environment,
+        application_name="ohip-api",
+        statement_timeout_ms=config.api.db_statement_timeout_ms,
+    )
+
+
 def compose(config: ApiConfig, pool: Pool, redis: Any) -> ApiServices:
-    """Serviços do worker sobre o pool Oracle e o Redis síncrono."""
-    # Prazo próprio da API (API_ORACLE_CALL_TIMEOUT_MS), não o do consumer.
-    session = InlineSession(PooledSession(pool, call_timeout_ms=config.api.oracle_call_timeout_ms))
+    """Serviços do worker sobre o pool do banco e o Redis síncrono. O pool já vem com o prazo
+    próprio da API (``API_DB_STATEMENT_TIMEOUT_MS``, ``open_api_pool``)."""
+    session = InlineSession(PooledSession(pool))
     module_codes = config.routing.module_codes
     monitoring = Monitoring(
-        store=OracleMonitoringStore(session), masking=MaskingPolicy(), module_codes=module_codes
+        store=PostgresMonitoringStore(session), masking=MaskingPolicy(), module_codes=module_codes
     )
     messaging = MessagingOptions(
         exchange_names={
@@ -126,8 +137,8 @@ def compose(config: ApiConfig, pool: Pool, redis: Any) -> ApiServices:
         },
         module_codes=module_codes,
     )
-    operations = OracleOperationsStore(session)
-    replays = OracleReplayStore(session)
+    operations = PostgresOperationsStore(session)
+    replays = PostgresReplayStore(session)
     cache = RedisApiCache(redis, status_ttl_s=config.redis.api_status_ttl_s)
     status = StatusService(
         cache=cache, compute=status_payload(monitoring), ttl_s=config.redis.api_status_ttl_s
@@ -135,7 +146,7 @@ def compose(config: ApiConfig, pool: Pool, redis: Any) -> ApiServices:
     broker_url = config.rabbitmq.url.get_secret_value()
     readiness = Readiness(
         {
-            "oracle": lambda: run_sync(monitoring.ping()),
+            "postgres": lambda: run_sync(monitoring.ping()),
             "redis": cache.ping,
             "rabbitmq": lambda: run_sync(
                 probe_broker(broker_url, timeout_s=config.rabbitmq.connect_timeout_s)
@@ -172,7 +183,7 @@ def create_app() -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        pool = open_pool(config.oracle)
+        pool = open_api_pool(config)
         redis = open_sync_redis(config.redis)
         try:
             app.state.services = compose(config, pool, redis)
@@ -180,7 +191,7 @@ def create_app() -> FastAPI:
             yield
         finally:
             redis.close()
-            pool.close(force=True)
+            pool.close()
             log.info("api_encerrada")
 
     # Em produção a documentação interativa fica desligada (o contrato está no API.md e no

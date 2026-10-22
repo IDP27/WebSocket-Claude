@@ -1,21 +1,22 @@
-"""``PurgeStore`` no Oracle 11g (ARCHITECTURE §5.1, ADR-0020 §2).
+"""``PurgeStore`` no PostgreSQL (ARCHITECTURE §5.1, ADR-0020 §2).
 
-``DELETE ... AND ROWNUM <= :n`` com commit por lote; corte pelo relógio do banco. Usa os
+``DELETE ... WHERE id IN (SELECT id ... LIMIT %(n)s)`` com commit por lote; corte pelo relógio
+do banco (``statement_timestamp()``, que permite usar índice). Usa os
 índices existentes (``resolved_at``, ``sent_at``, ``received_at``, ``event_raw_id``,
 ``outbox_id``); o passo ``OUTBOX_FAILED`` filtra poucas linhas (``FAILED`` é exceção).
-Planos de execução a conferir no Oracle real (Q-17). Use com o usuário ``ohip_purge``
-(``sql/900_grants_example.sql``).
+Planos de execução conferidos no contêiner de teste e a conferir no banco real (Q-17). Use com
+o usuário ``ohip_purge`` (``sql/postgres/900_grants_example.sql``).
 """
 
 from __future__ import annotations
 
 from typing import Final
 
-from ohip_streaming.adapters.oracle.database import Cursor, Session, query, transaction
+from ohip_streaming.adapters.postgres.database import Cursor, Session, query, transaction
 from ohip_streaming.application.errors import StoreOperationError
 from ohip_streaming.application.ports import PurgeTarget
 
-CUTOFF = "SYS_EXTRACT_UTC(SYSTIMESTAMP) - NUMTODSINTERVAL(:days, 'DAY')"
+CUTOFF = "statement_timestamp() - make_interval(days => %(days)s)"
 
 # Tabela com alias e filtro de cada alvo. Linhas PENDING/FAILED e DLQ aberta seguram o bruto.
 _FILTERS: Final[dict[PurgeTarget, tuple[str, str]]] = {
@@ -41,7 +42,9 @@ _FILTERS: Final[dict[PurgeTarget, tuple[str, str]]] = {
 
 def delete_sql(target: PurgeTarget) -> str:
     table, where = _FILTERS[target]
-    return f"DELETE FROM {table} WHERE {where} AND ROWNUM <= :n"  # noqa: S608 - texto fixo
+    name, alias = table.split()
+    subquery = f"SELECT {alias}.id FROM {table} WHERE {where} LIMIT %(n)s"  # noqa: S608 - texto fixo
+    return f"DELETE FROM {name} WHERE id IN ({subquery})"  # noqa: S608 - texto fixo
 
 
 def count_sql(target: PurgeTarget) -> str:
@@ -49,7 +52,7 @@ def count_sql(target: PurgeTarget) -> str:
     return f"SELECT COUNT(*) FROM {table} WHERE {where}"  # noqa: S608 - texto fixo
 
 
-class OraclePurgeStore:
+class PostgresPurgeStore:
     """Implementa ``PurgeStore``. Use com ``PooledSession`` e prazo de chamada folgado."""
 
     def __init__(self, session: Session) -> None:

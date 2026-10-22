@@ -2,6 +2,7 @@
 
 - Status: Proposto (Fase 10)
 - Data: 2026-10-05
+- Alteração (2026-10-21, ADR-0021): banco PostgreSQL. As notas sobre o Instant Client nas units não valem mais; o teste de carga foi refeito com a latência medida no PostgreSQL (ADR-0021, resultado da implementação).
 
 ## Contexto
 

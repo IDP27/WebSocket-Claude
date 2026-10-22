@@ -1,4 +1,4 @@
-"""``ConsumerStatusStore`` no Oracle: estado da conexão por chain (OHIP_CONSUMER_STATUS).
+"""``ConsumerStatusStore`` no PostgreSQL: estado da conexão por chain (OHIP_CONSUMER_STATUS).
 
 Os horários usados na regra dos 10 s vêm do relógio do banco (ADR-0007), nunca da VM; os
 de saúde (mensagem, ping/pong) vêm do processo e são informativos (ADR-0020 §1). O estado
@@ -11,8 +11,8 @@ from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 
-from ohip_streaming.adapters.oracle.database import Cursor, Session, query, transaction
-from ohip_streaming.adapters.oracle.rows import (
+from ohip_streaming.adapters.postgres.database import Cursor, Session, query, transaction
+from ohip_streaming.adapters.postgres.rows import (
     CLOSE_REASON_BYTES,
     from_db,
     from_db_required,
@@ -25,51 +25,51 @@ from ohip_streaming.domain.connection import ConsumerState
 
 RECORD_STATE_SQL = """
 UPDATE ohip_consumer_status
-   SET state = :state, instance_id = :instance_id, updated_at = SYS_EXTRACT_UTC(SYSTIMESTAMP)
- WHERE chain_code = :chain_code"""
+   SET state = %(state)s, instance_id = %(instance_id)s, updated_at = statement_timestamp()
+ WHERE chain_code = %(chain_code)s"""
 
 RECORD_SUBSCRIBED_SQL = """
 UPDATE ohip_consumer_status
-   SET state = 'SUBSCRIBED', instance_id = :instance_id, subscription_id = :subscription_id,
-       connected_at = SYS_EXTRACT_UTC(SYSTIMESTAMP), token_expires_at = :token_expires_at,
-       next_attempt_at = NULL, updated_at = SYS_EXTRACT_UTC(SYSTIMESTAMP)
- WHERE chain_code = :chain_code"""
+   SET state = 'SUBSCRIBED', instance_id = %(instance_id)s, subscription_id = %(subscription_id)s,
+       connected_at = statement_timestamp(), token_expires_at = %(token_expires_at)s,
+       next_attempt_at = NULL, updated_at = statement_timestamp()
+ WHERE chain_code = %(chain_code)s"""
 
 _DISCONNECT_SET = """
 UPDATE ohip_consumer_status
-   SET state = :state,
-       last_disconnect_at = SYS_EXTRACT_UTC(SYSTIMESTAMP),
-       last_close_code = :close_code,
-       last_close_reason = :close_reason,
-       consecutive_failures = :consecutive_failures,
-       reconnects = reconnects + :reconnect,
-       updated_at = SYS_EXTRACT_UTC(SYSTIMESTAMP),"""
+   SET state = %(state)s,
+       last_disconnect_at = statement_timestamp(),
+       last_close_code = %(close_code)s,
+       last_close_reason = %(close_reason)s,
+       consecutive_failures = %(consecutive_failures)s,
+       reconnects = reconnects + %(reconnect)s,
+       updated_at = statement_timestamp(),"""
 
-# Duas variantes (com e sem próxima tentativa): um bind nulo dentro de NUMTODSINTERVAL
-# dependeria de conversão implícita.
+# Duas variantes (com e sem próxima tentativa): um bind nulo dentro de make_interval daria um
+# intervalo nulo sem aviso; a variante explícita deixa o NULL só onde ele é a intenção.
 RECORD_DISCONNECT_SQL = (
     _DISCONNECT_SET
     + """
-       next_attempt_at = SYS_EXTRACT_UTC(SYSTIMESTAMP) + NUMTODSINTERVAL(:wait_s, 'SECOND')
- WHERE chain_code = :chain_code"""
+       next_attempt_at = statement_timestamp() + make_interval(secs => %(wait_s)s)
+ WHERE chain_code = %(chain_code)s"""
 )
 RECORD_FINAL_DISCONNECT_SQL = (
     _DISCONNECT_SET
     + """
        next_attempt_at = NULL
- WHERE chain_code = :chain_code"""
+ WHERE chain_code = %(chain_code)s"""
 )
 
 # Colunas de saúde, na ordem de ConnectionHealth (nomes fixos: nunca vêm de fora).
 HEALTH_COLUMNS = ("last_message_at", "last_ping_at", "last_pong_at", "last_rtt_ms")
 
 SNAPSHOT_SQL = """
-SELECT SYS_EXTRACT_UTC(SYSTIMESTAMP), last_disconnect_at, state
+SELECT statement_timestamp(), last_disconnect_at, state
   FROM ohip_consumer_status
- WHERE chain_code = :chain_code"""
+ WHERE chain_code = %(chain_code)s"""
 
 
-class OracleConsumerStatusStore:
+class PostgresConsumerStatusStore:
     """Implementa ``ConsumerStatusStore``. Use a sessão de controle (``PooledSession``)."""
 
     def __init__(self, session: Session) -> None:
@@ -172,10 +172,10 @@ def health_sql(chain_code: str, health: ConnectionHealth) -> tuple[str | None, d
     }
     if not params:
         return None, {}
-    sets = ", ".join(f"{column} = :{column}" for column in params)
+    sets = ", ".join(f"{column} = %({column})s" for column in params)
     params["chain_code"] = chain_code
     statement = f"""
 UPDATE ohip_consumer_status
-   SET {sets}, updated_at = SYS_EXTRACT_UTC(SYSTIMESTAMP)
- WHERE chain_code = :chain_code"""  # noqa: S608 - colunas de uma lista fixa; valores por bind
+   SET {sets}, updated_at = statement_timestamp()
+ WHERE chain_code = %(chain_code)s"""  # noqa: S608 - colunas de uma lista fixa; valores por bind
     return statement, params

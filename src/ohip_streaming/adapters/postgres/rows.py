@@ -1,16 +1,23 @@
-"""Conversões entre o domínio e as colunas do Oracle 11g.
+"""Conversões entre o domínio e as colunas do PostgreSQL (ADR-0021 §4 e §6).
 
-Colunas ``TIMESTAMP`` guardam UTC sem fuso (DDL); a aplicação sempre trabalha com
-``datetime`` com fuso UTC. ``VARCHAR2(n)`` conta **bytes**: textos livres são cortados em
-UTF-8 sem quebrar caractere.
+- Colunas ``timestamptz``; a conexão usa ``TimeZone=UTC``. A aplicação sempre trabalha com
+  ``datetime`` com fuso UTC: sem fuso não vai ao banco, e o que volta é convertido para UTC.
+- Textos livres (DLQ, erros, motivos) são cortados em UTF-8 sem quebrar caractere (n bytes
+  sempre cabem em ``varchar(n)``) e têm NUL e surrogates isolados trocados por ``U+FFFD``: o
+  PostgreSQL recusa NUL em texto, e a gravação da própria DLQ não pode falhar por isso.
+- O Oracle tratava ``''`` como ``NULL``; aqui são diferentes. Inventário da Fase 11 (ADR-0021
+  §4): os opcionais do evento já chegam normalizados pelo domínio, e os do adapter já gravam
+  ``NULL`` quando vazios (``last_close_reason``, ``unique_event_id``/``offset_value`` da DLQ);
+  os demais textos gravados são obrigatórios.
 """
 
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
 from dataclasses import replace
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Final
 from zoneinfo import ZoneInfo
 
 from ohip_streaming.application.ports import ProcessingStatus, StoredEvent
@@ -20,27 +27,39 @@ ERROR_MESSAGE_BYTES = 4000  # ohip_dlq.error_message, ohip_outbox.last_error
 CLOSE_REASON_BYTES = 500  # ohip_consumer_status.last_close_reason
 ERROR_CLASS_BYTES = 200  # ohip_dlq.error_class
 
+REPLACEMENT: Final = "�"
+_UNSAFE_RE: Final = re.compile("[\x00\ud800-\udfff]")
+
 
 def to_db(value: datetime | None) -> datetime | None:
     if value is None:
         return None
     if value.tzinfo is None:
         raise ValueError("datetime sem fuso não pode ir ao banco (UTC explícito)")
-    return value.astimezone(UTC).replace(tzinfo=None)
+    return value.astimezone(UTC)
 
 
 def from_db(value: datetime | None) -> datetime | None:
-    return None if value is None else value.replace(tzinfo=UTC)
+    return None if value is None else from_db_required(value)
 
 
 def from_db_required(value: datetime) -> datetime:
-    return value.replace(tzinfo=UTC)
+    if value.tzinfo is None:  # timestamp sem fuso: só por erro de DDL; o valor é UTC
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
+def clean_text(text: str) -> str:
+    """Troca NUL e surrogates isolados por ``U+FFFD`` (ADR-0021 §6)."""
+    return _UNSAFE_RE.sub(REPLACEMENT, text)
 
 
 def truncate_bytes(text: str, limit: int) -> str:
-    encoded = text.encode("utf-8")
+    """Corta em ``limit`` bytes UTF-8 sem quebrar caractere; já limpo de NUL e surrogates."""
+    cleaned = clean_text(text)
+    encoded = cleaned.encode("utf-8")
     if len(encoded) <= limit:
-        return text
+        return cleaned
     return encoded[: limit - 3].decode("utf-8", errors="ignore") + "..."
 
 

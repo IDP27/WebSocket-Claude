@@ -96,7 +96,7 @@ async def test_queue_message_detail_is_masked(h: Harness) -> None:
     (outbox,) = h.db.outbox.values()
     assert "Ana" not in outbox.body
     (raw,) = h.db.raw.values()
-    assert "Ana" in raw.event.payload_json  # o bruto no Oracle fica íntegro
+    assert "Ana" in raw.event.payload_json  # o bruto no banco fica íntegro
 
 
 async def test_seen_cache_duplicates_are_skipped_but_offset_advances(h: Harness) -> None:
@@ -155,7 +155,7 @@ async def test_allowlist_stores_raw_as_ignored_without_outbox() -> None:
 
 
 async def test_row_failures_go_to_dlq_without_outbox(h: Harness) -> None:
-    h.db.row_errors["uid-2"] = ("DatabaseError", "ORA-12899: valor grande demais")
+    h.db.row_errors["uid-2"] = ("DatabaseError", "22001: valor grande demais")
     summary = await h.run(frame("1"), frame("2"), frame("3"))
 
     assert summary.row_failures == 1
@@ -187,7 +187,7 @@ async def test_card_numbers_are_removed_from_rejected_messages_in_dlq(h: Harness
 
 async def test_card_numbers_are_removed_from_isolated_culprit_in_dlq() -> None:
     h = Harness(max_retries=0)
-    h.db.fail_persist_when = lambda b: BatchFailedError("ORA-00600") if b.events else None
+    h.db.fail_persist_when = lambda b: BatchFailedError("XX000") if b.events else None
     await h.run(
         frame("1", detail=[{"elementName": "MARKET CODE", "oldValue": "", "newValue": VISA_TEST}])
     )
@@ -206,7 +206,7 @@ async def test_redis_failures_never_affect_correctness(h: Harness) -> None:
 
 
 async def test_seen_cache_is_only_marked_after_commit(h: Harness) -> None:
-    h.db.fail_persist = [StoreUnavailableError("oracle fora")]
+    h.db.fail_persist = [StoreUnavailableError("banco fora")]
     with pytest.raises(StoreUnavailableError):
         await h.run(frame("1"))
     assert h.seen.seen == set()
@@ -240,7 +240,7 @@ async def test_persistent_failure_is_bisected_in_order_and_culprit_goes_to_dlq()
 
     def fail_if_contains_poison(batch: BatchToPersist) -> Exception | None:
         if any(r.event.unique_event_id == "uid-3" for r in batch.events):
-            return BatchFailedError("ORA-00600")
+            return BatchFailedError("XX000")
         return None
 
     h.db.fail_persist_when = fail_if_contains_poison
@@ -251,7 +251,7 @@ async def test_persistent_failure_is_bisected_in_order_and_culprit_goes_to_dlq()
     (culprit,) = [d for d in h.db.dlq.values() if d.stage is DlqStage.CONSUME]
     assert culprit.offset == "3"
     assert culprit.unique_event_id == "uid-3"
-    assert "ORA-00600" in culprit.error
+    assert "XX000" in culprit.error
     assert culprit.raw_message is not None
     assert "uid-3" in culprit.raw_message
     assert h.offset == Offset("5")
@@ -277,7 +277,7 @@ async def test_empty_batch_is_a_no_op(h: Harness) -> None:
 def _fail_events(*poisoned: str) -> Callable[[BatchToPersist], Exception | None]:
     def check(batch: BatchToPersist) -> Exception | None:
         if any(r.event.unique_event_id in poisoned for r in batch.events):
-            return BatchFailedError("ORA-01653: tablespace cheio")
+            return BatchFailedError("53100: tablespace cheio")
         return None
 
     return check
@@ -286,7 +286,7 @@ def _fail_events(*poisoned: str) -> Callable[[BatchToPersist], Exception | None]
 async def test_systemic_failure_trips_the_breaker_instead_of_draining_to_dlq() -> None:
     h = Harness(max_retries=0)
     # Falha que atinge qualquer evento (ex.: tablespace do evento bruto cheio), mas a DLQ grava.
-    h.db.fail_persist_when = lambda b: BatchFailedError("ORA-01653") if b.events else None
+    h.db.fail_persist_when = lambda b: BatchFailedError("53100") if b.events else None
 
     with pytest.raises(StoreUnavailableError, match="sistêmica"):
         await h.run(*(frame(str(n)) for n in range(1, 9)))
@@ -328,12 +328,12 @@ async def test_adjacent_culprits_are_treated_as_systemic() -> None:
     assert h.offset == Offset("2")
 
 
-@pytest.mark.parametrize("already_stored_in", ["oracle", "redis"])
+@pytest.mark.parametrize("already_stored_in", ["banco", "redis"])
 async def test_replay_culprits_separated_only_by_duplicates_go_to_dlq(
     already_stored_in: str,
 ) -> None:
     h = Harness(max_retries=0)
-    if already_stored_in == "oracle":
+    if already_stored_in == "banco":
         await h.run(*(frame(str(n)) for n in range(13, 17)))
     else:
         h.seen.seen.update(f"uid-{n}" for n in range(13, 17))

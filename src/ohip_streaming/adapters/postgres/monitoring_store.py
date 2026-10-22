@@ -1,10 +1,10 @@
-"""``MonitoringStore`` no Oracle 11g: leituras da API de controle (ADR-0017).
+"""``MonitoringStore`` no PostgreSQL: leituras da API de controle (ADR-0017).
 
-- Paginação por chave com ``ROWNUM`` (sem ``FETCH FIRST``): ``id`` decrescente, ``id < :cursor``,
-  e ``limit + 1`` linhas para saber se há próxima página.
+- Paginação por chave com ``LIMIT``: ``id`` decrescente, ``id < %(cursor)s``, e ``limit + 1``
+  linhas para saber se há próxima página.
 - Filtros montados só com fragmentos fixos deste módulo; todo valor vai por bind.
-- Horários com o relógio do banco; TIMESTAMP de filtro vai como TIMESTAMP (``setinputsizes``),
-  senão o driver mandaria DATE e cortaria a fração de segundo.
+- Horários com o relógio do banco (``statement_timestamp()``, que deixa o planejador usar o
+  índice de ``received_at``, ADR-0021 §4).
 """
 
 from __future__ import annotations
@@ -13,10 +13,8 @@ from collections.abc import Callable, Sequence
 from datetime import datetime
 from typing import Any, TypeVar
 
-import oracledb
-
-from ohip_streaming.adapters.oracle.database import Session, query
-from ohip_streaming.adapters.oracle.rows import (
+from ohip_streaming.adapters.postgres.database import Session, query
+from ohip_streaming.adapters.postgres.rows import (
     from_db,
     from_db_required,
     stored_event_from_row,
@@ -47,8 +45,8 @@ from ohip_streaming.domain.offset import Offset
 
 T = TypeVar("T")
 
-PING_SQL = "SELECT 1 FROM dual"
-DB_NOW_SQL = "SELECT SYS_EXTRACT_UTC(SYSTIMESTAMP) FROM dual"
+PING_SQL = "SELECT 1"
+DB_NOW_SQL = "SELECT statement_timestamp()"
 
 STATUS_SQL = """
 SELECT s.chain_code, s.state, s.instance_id, s.subscription_id, o.last_offset,
@@ -73,14 +71,10 @@ SELECT chain_code, stage, COUNT(*)
 
 # Atraso em segundos (received_at - event_ts) dos eventos dos últimos 5 minutos.
 RECENT_EVENTS_SQL = """
-SELECT chain_code, COUNT(*), PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY lag_s)
-  FROM (SELECT chain_code,
-               EXTRACT(DAY FROM (received_at - event_ts)) * 86400
-             + EXTRACT(HOUR FROM (received_at - event_ts)) * 3600
-             + EXTRACT(MINUTE FROM (received_at - event_ts)) * 60
-             + EXTRACT(SECOND FROM (received_at - event_ts)) AS lag_s
-          FROM ohip_event_raw
-         WHERE received_at >= SYS_EXTRACT_UTC(SYSTIMESTAMP) - NUMTODSINTERVAL(300, 'SECOND'))
+SELECT chain_code, COUNT(*),
+       percentile_cont(0.95) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (received_at - event_ts)))
+  FROM ohip_event_raw
+ WHERE received_at >= statement_timestamp() - make_interval(secs => 300)
  GROUP BY chain_code"""
 
 EVENT_COLUMNS = (
@@ -106,56 +100,52 @@ EVENT_DETAIL_SQL = """
 SELECT id, chain_code, subscription_id, event_ts, payload, processing_status, received_at,
        persisted_at, updated_at
   FROM ohip_event_raw
- WHERE unique_event_id = :uid"""
+ WHERE unique_event_id = %(uid)s"""
 EVENT_OUTBOX_SQL = f"""
 SELECT {OUTBOX_COLUMNS}
   FROM ohip_outbox
- WHERE event_raw_id = :raw_id
+ WHERE event_raw_id = %(raw_id)s
  ORDER BY id"""  # noqa: S608 - colunas fixas deste módulo
 EVENT_DLQ_SQL = f"""
 SELECT {DLQ_COLUMNS}
   FROM ohip_dlq
- WHERE event_raw_id = :raw_id
+ WHERE event_raw_id = %(raw_id)s
  ORDER BY id"""  # noqa: S608 - colunas fixas deste módulo
 
 OLDEST_PENDING_SQL = """
-SELECT MIN(created_at), SYS_EXTRACT_UTC(SYSTIMESTAMP)
+SELECT MIN(created_at), statement_timestamp()
   FROM ohip_outbox
  WHERE status = 'PENDING'"""
 
 REPLAY_BY_ID_SQL = f"""
 SELECT {REPLAY_COLUMNS}
   FROM ohip_replay_request
- WHERE id = :id"""  # noqa: S608 - colunas fixas deste módulo
+ WHERE id = %(id)s"""  # noqa: S608 - colunas fixas deste módulo
 
 
 def page_sql(columns: str, table: str, conditions: Sequence[str]) -> str:
     """``SELECT`` paginado por chave. ``conditions`` são fragmentos fixos deste módulo."""
-    where = "".join(f"\n           AND {condition}" for condition in conditions)
+    where = "".join(f"\n   AND {condition}" for condition in conditions)
     return f"""
-SELECT *
-  FROM (SELECT {columns}
-          FROM {table}
-         WHERE 1 = 1{where}
-         ORDER BY id DESC)
- WHERE ROWNUM <= :fetch"""  # noqa: S608 - fragmentos fixos; valores por bind
+SELECT {columns}
+  FROM {table}
+ WHERE 1 = 1{where}
+ ORDER BY id DESC
+ LIMIT %(fetch)s"""  # noqa: S608 - fragmentos fixos; valores por bind
 
 
 def oldest_pending_sql(chain_code: str | None) -> str:
-    return OLDEST_PENDING_SQL + ("\n   AND chain_code = :chain_code" if chain_code else "")
+    return OLDEST_PENDING_SQL + ("\n   AND chain_code = %(chain_code)s" if chain_code else "")
 
 
 def _timestamp(value: datetime) -> datetime | None:
     return to_db(value)
 
 
-def event_conditions(
-    query_: EventFilter, page: PageRequest
-) -> tuple[list[str], dict[str, Any], dict[str, Any]]:
-    """Fragmentos, binds e tipos dos binds do filtro de ``/events``."""
+def event_conditions(query_: EventFilter, page: PageRequest) -> tuple[list[str], dict[str, Any]]:
+    """Fragmentos e binds do filtro de ``/events``."""
     conditions: list[str] = []
     params: dict[str, Any] = {}
-    sizes: dict[str, Any] = {}
     equals = (
         ("chain_code", query_.chain_code),
         ("hotel_id", query_.hotel_id),
@@ -164,31 +154,29 @@ def event_conditions(
     )
     for column, value in equals:
         if value is not None:
-            conditions.append(f"{column} = :{column}")
+            conditions.append(f"{column} = %({column})s")
             params[column] = value
     if query_.module_name is not None:
-        conditions.append("UPPER(module_name) = :module_name")
+        conditions.append("UPPER(module_name) = %(module_name)s")
         params["module_name"] = query_.module_name.upper()
     if query_.received_from is not None:
-        conditions.append("received_at >= :received_from")
+        conditions.append("received_at >= %(received_from)s")
         params["received_from"] = _timestamp(query_.received_from)
-        sizes["received_from"] = oracledb.DB_TYPE_TIMESTAMP
     if query_.received_to is not None:
-        conditions.append("received_at < :received_to")
+        conditions.append("received_at < %(received_to)s")
         params["received_to"] = _timestamp(query_.received_to)
-        sizes["received_to"] = oracledb.DB_TYPE_TIMESTAMP
     if query_.processing_status is not None:
-        conditions.append("processing_status = :processing_status")
+        conditions.append("processing_status = %(processing_status)s")
         params["processing_status"] = query_.processing_status.value
     _cursor(conditions, params, page)
-    return conditions, params, sizes
+    return conditions, params
 
 
 def outbox_conditions(query_: OutboxQuery, page: PageRequest) -> tuple[list[str], dict[str, Any]]:
-    conditions = ["status = :status"]
+    conditions = ["status = %(status)s"]
     params: dict[str, Any] = {"status": query_.status}
     if query_.chain_code is not None:
-        conditions.append("chain_code = :chain_code")
+        conditions.append("chain_code = %(chain_code)s")
         params["chain_code"] = query_.chain_code
     _cursor(conditions, params, page)
     return conditions, params
@@ -198,10 +186,10 @@ def dlq_conditions(query_: DlqQuery, page: PageRequest) -> tuple[list[str], dict
     conditions: list[str] = []
     params: dict[str, Any] = {}
     if query_.stage is not None:
-        conditions.append("stage = :stage")
+        conditions.append("stage = %(stage)s")
         params["stage"] = query_.stage.value
     if query_.chain_code is not None:
-        conditions.append("chain_code = :chain_code")
+        conditions.append("chain_code = %(chain_code)s")
         params["chain_code"] = query_.chain_code
     if query_.resolved is not None:
         conditions.append("resolved_at IS NOT NULL" if query_.resolved else "resolved_at IS NULL")
@@ -213,10 +201,10 @@ def replay_conditions(query_: ReplayQuery, page: PageRequest) -> tuple[list[str]
     conditions: list[str] = []
     params: dict[str, Any] = {}
     if query_.chain_code is not None:
-        conditions.append("chain_code = :chain_code")
+        conditions.append("chain_code = %(chain_code)s")
         params["chain_code"] = query_.chain_code
     if query_.status is not None:
-        conditions.append("status = :status")
+        conditions.append("status = %(status)s")
         params["status"] = query_.status.value
     _cursor(conditions, params, page)
     return conditions, params
@@ -224,7 +212,7 @@ def replay_conditions(query_: ReplayQuery, page: PageRequest) -> tuple[list[str]
 
 def _cursor(conditions: list[str], params: dict[str, Any], page: PageRequest) -> None:
     if page.cursor is not None:
-        conditions.append("id < :cursor")
+        conditions.append("id < %(cursor)s")
         params["cursor"] = page.cursor
     params["fetch"] = page.limit + 1
 
@@ -324,7 +312,7 @@ def replay_entry(row: Sequence[Any]) -> ReplayEntry:
     )
 
 
-class OracleMonitoringStore:
+class PostgresMonitoringStore:
     """Implementa ``MonitoringStore``. Na API, com ``InlineSession`` (ADR-0017)."""
 
     def __init__(self, session: Session) -> None:
@@ -345,10 +333,8 @@ class OracleMonitoringStore:
         return await self._session.run(work)
 
     async def events(self, query_: EventFilter, page: PageRequest) -> Page[EventSummary]:
-        conditions, params, sizes = event_conditions(query_, page)
-        rows = await self._query(
-            page_sql(EVENT_COLUMNS, "ohip_event_raw", conditions), params, sizes
-        )
+        conditions, params = event_conditions(query_, page)
+        rows = await self._query(page_sql(EVENT_COLUMNS, "ohip_event_raw", conditions), params)
         return _page([event_summary(r) for r in rows], page, lambda e: e.raw_event_id)
 
     async def event(self, unique_event_id: str) -> EventRecord | None:
@@ -403,18 +389,11 @@ class OracleMonitoringStore:
     # ------------------------------------------------------------------- apoio
 
     @staticmethod
-    def _run(
-        connection: Any,
-        statement: str,
-        params: dict[str, Any],
-        sizes: dict[str, Any] | None = None,
-    ) -> list[Sequence[Any]]:
-        return query(connection, statement, params, failure=StoreOperationError, input_sizes=sizes)
+    def _run(connection: Any, statement: str, params: dict[str, Any]) -> list[Sequence[Any]]:
+        return query(connection, statement, params, failure=StoreOperationError)
 
-    async def _query(
-        self, statement: str, params: dict[str, Any], sizes: dict[str, Any] | None = None
-    ) -> list[Sequence[Any]]:
-        return await self._session.run(lambda c: self._run(c, statement, params, sizes))
+    async def _query(self, statement: str, params: dict[str, Any]) -> list[Sequence[Any]]:
+        return await self._session.run(lambda c: self._run(c, statement, params))
 
 
 def _snapshot(

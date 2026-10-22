@@ -13,7 +13,7 @@ Só com evidência de estouro: teste de carga (`tests/load/`) acima do orçament
 ## Roteiro
 
 1. **Medir**: reproduza com o teste de carga contra `tests/fakes/fake_ohip_server.py` (10× o pico da Q-8). Registre p50/p95/p99 de latência (recebimento → commit), eventos/s, memória RSS ao longo do tempo e uso de CPU.
-2. **Perfilar**: `py-spy record` / `py-spy top` no processo; para Oracle, tempo por transação e tamanho do lote.
+2. **Perfilar**: `py-spy record` / `py-spy top` no processo; para o banco, tempo por transação e tamanho do lote (`EXPLAIN (ANALYZE, BUFFERS)` nas consultas lentas).
 3. **Hipótese**: aponte o gargalo com evidência (flame graph, contadores).
 4. **Mudar o mínimo**: uma mudança por vez, sem quebrar garantias (transação única, ordem por chain, dedup, epoch). Nunca troque correção por velocidade.
 5. **Provar**: rode o mesmo teste e compare antes/depois na mesma máquina. Rode a suíte completa de testes.
@@ -22,7 +22,7 @@ Só com evidência de estouro: teste de carga (`tests/load/`) acima do orçament
 
 - Não altere contratos (fila, API, tabelas) sem ADR.
 - Não adicione dependências sem ADR.
-- Se o gargalo for estrutural (ex.: Oracle 11g síncrono), proponha a mudança ao arquiteto em vez de remendar.
+- Se o gargalo for estrutural (ex.: acesso síncrono ao banco), proponha a mudança ao arquiteto em vez de remendar.
 
 ## Formato de saída
 

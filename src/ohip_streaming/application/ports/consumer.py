@@ -62,7 +62,7 @@ class RowFailure:
 @dataclass(frozen=True, slots=True)
 class BatchResult:
     inserted: tuple[str, ...] = ()  # uniqueEventIds gravados
-    duplicates: tuple[str, ...] = ()  # ORA-00001 em uq_evt ou uq_off
+    duplicates: tuple[str, ...] = ()  # violação de unicidade em uq_evt ou uq_off
     row_failures: tuple[RowFailure, ...] = ()  # outros erros por linha → DLQ CONSUME
 
 
@@ -94,7 +94,7 @@ class EventStore(Protocol):
            NULL``;
         6. barreira de epoch como último comando; falhou → rollback e ``LeaseLostError``.
 
-        Levanta ``StoreUnavailableError`` (banco fora **ou sem recursos**: ORA-01653/01654/
+        Levanta ``StoreUnavailableError`` (banco fora **ou sem recursos**: disco/memória cheios,
         01688/01691/30036 etc. — falha que atingiria qualquer lote) ou ``BatchFailedError``
         (lote recusado por outro motivo); nos dois casos nada foi gravado.
         """

@@ -1,6 +1,6 @@
 """Processo ``ohip-purge``: expurgo por retenção, disparado pelo timer do systemd (ADR-0020 §2).
 
-Uso: ``ohip-purge`` (``Type=oneshot``). Só Oracle, com o usuário ``ohip_purge``; sem Redis nem
+Uso: ``ohip-purge`` (``Type=oneshot``). Só o banco, com o usuário ``ohip_purge``; sem Redis nem
 RabbitMQ. Padrão ``PURGE_DRY_RUN=true``: só conta. SIGTERM/SIGINT: termina o lote em curso e
 sai com sucesso (o resto fica para a próxima execução). Erro: código 1 (``OnFailure=`` da unit).
 """
@@ -10,8 +10,8 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 
-from ohip_streaming.adapters.oracle.database import PooledSession, open_pool
-from ohip_streaming.adapters.oracle.purge_store import OraclePurgeStore
+from ohip_streaming.adapters.postgres.database import PooledSession, open_pool
+from ohip_streaming.adapters.postgres.purge_store import PostgresPurgeStore
 from ohip_streaming.adapters.system import SystemClock
 from ohip_streaming.application.ports import PURGE_ORDER
 from ohip_streaming.application.use_cases.purge import (
@@ -21,7 +21,7 @@ from ohip_streaming.application.use_cases.purge import (
 )
 from ohip_streaming.config import (
     AppSettings,
-    OracleSettings,
+    PostgresSettings,
     PurgeSettings,
     load_settings,
 )
@@ -34,14 +34,14 @@ log = get_logger(__name__)
 @dataclass(frozen=True)
 class PurgeConfig:
     app: AppSettings
-    oracle: OracleSettings
+    db: PostgresSettings
     purge: PurgeSettings
 
     @classmethod
     def load(cls) -> PurgeConfig:
         return cls(
             app=load_settings(AppSettings),
-            oracle=load_settings(OracleSettings),
+            db=load_settings(PostgresSettings),
             purge=load_settings(PurgeSettings),
         )
 
@@ -59,17 +59,22 @@ def purge_options(settings: PurgeSettings) -> PurgeOptions:
 async def serve(config: PurgeConfig) -> list[PurgeResult]:
     stop = asyncio.Event()
     stop_on_signals(stop.set)
-    pool = open_pool(config.oracle)
+    pool = open_pool(
+        config.db,
+        environment=config.app.environment,
+        application_name="ohip-purge",
+        statement_timeout_ms=config.purge.call_timeout_ms,
+    )
     try:
-        session = PooledSession(pool, call_timeout_ms=config.purge.call_timeout_ms)
+        session = PooledSession(pool)
         use_case = PurgeExpiredData(
-            store=OraclePurgeStore(session),
+            store=PostgresPurgeStore(session),
             clock=SystemClock(),
             options=purge_options(config.purge),
         )
         return await use_case.execute(stop)
     finally:
-        pool.close(force=True)
+        pool.close()
 
 
 def main() -> int:

@@ -1,11 +1,11 @@
 """Configuração por ambiente (RF-12) com pydantic-settings.
 
-Cada grupo lê suas variáveis com um prefixo próprio (``OHIP_``, ``ORACLE_``, ...), do
+Cada grupo lê suas variáveis com um prefixo próprio (``OHIP_``, ``POSTGRES_``, ...), do
 ambiente ou do arquivo ``.env`` no diretório de trabalho. Variáveis de ambiente têm
 precedência sobre o ``.env`` (em produção, o systemd injeta via ``EnvironmentFile``).
 
 Cada processo carrega só os grupos de que precisa (o painel, por exemplo, não recebe
-credenciais do Oracle). Segredos são ``SecretStr``: nunca aparecem em ``repr`` nem em log.
+credenciais do banco). Segredos são ``SecretStr``: nunca aparecem em ``repr`` nem em log.
 
 Limites do protocolo OHIP (ADR-0007) são validados aqui, para que uma configuração que
 provocaria 4409 ou 4408 não chegue a subir.
@@ -208,21 +208,30 @@ class OhipRoutingSettings(BaseSettings):
         return {key.strip().lower(): code.strip() for key, code in value.items()}
 
 
-class OracleSettings(BaseSettings):
-    """Oracle 11g em modo Thick (ADR-0003)."""
+SslMode = Literal["disable", "allow", "prefer", "require", "verify-ca", "verify-full"]
 
-    model_config = _config("ORACLE_")
 
-    dsn: str = Field(min_length=1)
+class PostgresSettings(BaseSettings):
+    """PostgreSQL 15+ com psycopg 3 síncrono (ADR-0021).
+
+    ``sslmode=disable`` só é aceito em desenvolvimento: a composição confere com o
+    ``APP_ENVIRONMENT`` (RNF-07)."""
+
+    model_config = _config("POSTGRES_")
+
+    host: str = Field(min_length=1)
+    port: int = Field(default=5432, ge=1, le=65535)
+    db: str = Field(min_length=1)
     user: str = Field(min_length=1)
     password: SecretStr
-    client_lib_dir: Path | None = None  # None: Instant Client pelo caminho padrão do sistema
+    sslmode: SslMode = "verify-full"
+    sslrootcert: Path | None = None  # None: certificados do sistema
     pool_min: int = Field(default=1, ge=1)
     pool_max: int = Field(default=4, ge=1)
-    # Espera máxima por uma conexão livre do pool e por uma chamada ao banco. Estourou →
-    # "banco indisponível" (a conexão é descartada). 0 desliga o limite da chamada.
+    # Espera máxima por uma conexão livre do pool e prazo de cada comando no servidor.
+    # Estourou → "banco indisponível". 0 desliga o prazo do comando.
     pool_wait_timeout_ms: int = Field(default=10_000, ge=100)
-    call_timeout_ms: int = Field(default=60_000, ge=0)
+    statement_timeout_ms: int = Field(default=60_000, ge=0)
 
     @model_validator(mode="after")
     def _validate_pool(self) -> Self:
@@ -377,7 +386,7 @@ class ConsumerSettings(BaseSettings):
 
 
 class LeaseSettings(BaseSettings):
-    """Lease com prazo e epoch no Oracle, comum a consumer e publisher (ADR-0008, ADR-0014)."""
+    """Lease com prazo e epoch no banco, comum a consumer e publisher (ADR-0008, ADR-0014)."""
 
     model_config = _config("LEASE_")
 
@@ -406,9 +415,10 @@ class ApiSettings(BaseSettings):
     host: str = "127.0.0.1"  # atrás do Nginx (TLS e bloqueio de /health, /ready, /metrics)
     port: int = Field(default=8080, ge=1, le=65535)
     workers: int = Field(default=2, ge=1)
-    # Prazo de cada chamada ao Oracle feita pela API, menor que o do consumer: uma busca cara
-    # não segura uma conexão do pool (ORACLE_POOL_MAX por worker) por muito tempo.
-    oracle_call_timeout_ms: int = Field(default=15_000, ge=1_000)
+    # Prazo de cada comando da API no banco (statement_timeout do pool da API), menor que o
+    # do consumer: uma busca cara não segura uma conexão do pool (POSTGRES_POOL_MAX por worker)
+    # por muito tempo (ADR-0017, ADR-0021 §7).
+    db_statement_timeout_ms: int = Field(default=15_000, ge=1_000)
     metrics_cache_s: float = Field(default=5.0, ge=0)
     ready_cache_s: float = Field(default=5.0, ge=0)
 
@@ -423,7 +433,7 @@ class ApiSettings(BaseSettings):
 
 class PurgeSettings(BaseSettings):
     """Expurgo por retenção, processo ``ohip-purge`` (ARCHITECTURE §5.1, ADR-0020 §2).
-    Credenciais: o grupo ``ORACLE_*`` num arquivo de ambiente com o usuário ``ohip_purge``."""
+    Credenciais: o grupo ``POSTGRES_*`` num arquivo de ambiente com o usuário ``ohip_purge``."""
 
     model_config = _config("PURGE_")
 
@@ -432,7 +442,8 @@ class PurgeSettings(BaseSettings):
     batch_size: int = Field(default=5_000, ge=100, le=50_000)
     pause_ms: int = Field(default=200, ge=0)
     max_runtime_s: float = Field(default=3_600.0, ge=60)
-    # Prazo de cada DELETE em lote (maior que o ORACLE_CALL_TIMEOUT_MS das outras rotas).
+    # Prazo de cada DELETE em lote (statement_timeout do pool do expurgo; maior que o
+    # POSTGRES_STATEMENT_TIMEOUT_MS dos outros processos).
     call_timeout_ms: int = Field(default=300_000, ge=10_000)
     # Padrão: só conta. Apagar exige PURGE_DRY_RUN=false, depois de conferir as contagens.
     dry_run: bool = True

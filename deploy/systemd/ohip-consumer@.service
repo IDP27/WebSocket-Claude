@@ -1,5 +1,5 @@
 # Consumer de uma chain (instância = chain_code): systemctl enable --now ohip-consumer@CHAIN1
-# Fora de Uvicorn/Gunicorn (ADR-0001). Um por (appKey, chain, gateway): o lease no Oracle
+# Fora de Uvicorn/Gunicorn (ADR-0001). Um por (appKey, chain, gateway): o lease no banco
 # garante isso mesmo com duas VMs (ADR-0008).
 [Unit]
 Description=OHIP Streaming - consumer da chain %i
@@ -26,7 +26,7 @@ RestartSec=10
 KillSignal=SIGTERM
 # complete → drenagem (OHIP_DRAIN_TIMEOUT_S) → desconexão gravada → lease liberado.
 TimeoutStopSec=90
-# Endurecimento (ADR-0020 §4). O Instant Client grava trace em $HOME (StateDirectory).
+# Endurecimento (ADR-0020 §4). Só $HOME (StateDirectory) é gravável.
 NoNewPrivileges=yes
 PrivateTmp=yes
 PrivateDevices=yes

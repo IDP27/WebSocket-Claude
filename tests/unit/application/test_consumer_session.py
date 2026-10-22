@@ -273,7 +273,7 @@ async def test_database_down_while_checking_replay_keeps_the_connection() -> Non
     loop, session, db, _ = await control(replay=True, retry=retry)
 
     async def down(chain_code: str) -> None:
-        raise StoreUnavailableError("ORA-03113")
+        raise StoreUnavailableError("08006")
 
     db.pending_request = down  # type: ignore[method-assign]
     await loop.step()
@@ -284,7 +284,7 @@ async def test_database_down_while_checking_replay_keeps_the_connection() -> Non
 
 
 async def test_database_down_during_dlq_retry_only_warns() -> None:
-    retry = RetryDlq(StoreUnavailableError("ORA-03113"))
+    retry = RetryDlq(StoreUnavailableError("08006"))
     loop, session, _, status = await control(retry=retry)
     await loop.step()
     await loop.step()

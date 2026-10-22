@@ -1,7 +1,7 @@
-"""Cenários de contrato dos stores, iguais para o fake em memória e para o Oracle (Fase 3).
+"""Cenários de contrato dos stores, iguais para o fake em memória e para o PostgreSQL (Fase 11).
 
 Cada cenário fala só com os ports (e com as consultas de inspeção do backend). Se um cenário
-passa no fake e falha no Oracle, o adapter (ou o fake) não cumpre o contrato.
+passa no fake e falha no PostgreSQL, o adapter (ou o fake) não cumpre o contrato.
 """
 
 from __future__ import annotations
@@ -139,7 +139,7 @@ async def test_row_failure_goes_to_dlq_and_the_rest_commits(backend: Backend) ->
     assert len(result.inserted) == 2
     (item,) = backend.dlq_items(CHAIN)
     assert (item.stage, item.unique_event_id, item.offset) == ("CONSUME", bad.unique_event_id, "2")
-    assert "12899" in item.error
+    assert backend.broken_code in item.error
     assert item.raw_message is not None
     assert bad.unique_event_id in item.raw_message
     assert len(backend.outbox_rows(CHAIN)) == 2

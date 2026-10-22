@@ -138,7 +138,7 @@ def make_env(db: InMemoryDatabase | None = None, *, raise_errors: bool = True) -
     monitoring = Monitoring(store=store, masking=MaskingPolicy(), module_codes={})
     messaging = MessagingOptions(exchange_names=EXCHANGES)
     env = Env(db, store, cache, client=None)  # type: ignore[arg-type]
-    env.checks = {"oracle": lambda: asyncio.run(monitoring.ping()), "redis": lambda: None}
+    env.checks = {"postgres": lambda: asyncio.run(monitoring.ping()), "redis": lambda: None}
     services = ApiServices(
         tokens={token_hash(READ_TOKEN): Role.READ, token_hash(ADMIN_TOKEN): Role.ADMIN},
         monitoring=monitoring,
@@ -221,7 +221,7 @@ def test_validation_error_format(env: Env) -> None:
 
 
 def test_database_down_is_503(env: Env) -> None:
-    env.store.unavailable = StoreUnavailableError("ORA-03113")
+    env.store.unavailable = StoreUnavailableError("08006")
     response = env.client.get("/api/v1/events", headers=READ)
     assert response.status_code == 503
     assert response.json()["error"]["code"] == "DEPENDENCY_UNAVAILABLE"
@@ -239,7 +239,7 @@ def test_unexpected_error_is_500_without_detail() -> None:
 
 
 def test_every_route_is_sync() -> None:
-    """ADR-0003: rota que toca o Oracle é ``def`` (threadpool), nunca ``async def``."""
+    """ADR-0017: rota que toca o banco é ``def`` (threadpool), nunca ``async def``."""
     routes = [r for router in (api, internal) for r in router.routes if isinstance(r, APIRoute)]
     assert len(routes) == 14  # as 14 rotas da tabela do API.md
     assert not [r.path for r in routes if inspect.iscoroutinefunction(r.endpoint)]
@@ -496,7 +496,7 @@ def test_dlq_consume_retry_is_only_a_request() -> None:
 def test_ready_reports_each_dependency(env: Env) -> None:
     ok = env.client.get("/ready")
     assert ok.status_code == 200
-    assert set(ok.json()["checks"]) == {"oracle", "redis"}
+    assert set(ok.json()["checks"]) == {"postgres", "redis"}
 
     def broken() -> None:
         raise ConnectionError("redis://:senha@host")
@@ -527,13 +527,13 @@ def test_metrics_endpoint(env: Env) -> None:
     assert 'ohip_consumer_state{chain_code="CHAIN1",state="STOPPED"} 1' in text
     assert 'ohip_outbox_pending{chain_code="CHAIN1"} 3' in text
     assert 'ohip_broker_unavailable_total{process="publisher",instance="vm1:10:abc"} 2' in text
-    assert 'ohip_metrics_source_up{source="oracle"} 1' in text
+    assert 'ohip_metrics_source_up{source="postgres"} 1' in text
 
 
-def test_metrics_survive_oracle_down(env: Env) -> None:
+def test_metrics_survive_database_down(env: Env) -> None:
     env.store.unavailable = StoreUnavailableError("fora")
     text = env.client.get("/metrics").text
-    assert 'ohip_metrics_source_up{source="oracle"} 0' in text
+    assert 'ohip_metrics_source_up{source="postgres"} 0' in text
     assert "ohip_consumer_state" not in text
 
 
@@ -541,7 +541,7 @@ def test_metrics_survive_oracle_down(env: Env) -> None:
 
 
 def test_store_never_runs_on_the_server_event_loop() -> None:
-    """O Oracle (store) roda no thread da requisição, fora do event loop do servidor."""
+    """O banco (store) roda no thread da requisição, fora do event loop do servidor."""
     env = make_env()
     server: dict[str, Any] = {}
     store_calls: list[tuple[int, asyncio.AbstractEventLoop]] = []

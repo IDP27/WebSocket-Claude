@@ -1,4 +1,4 @@
-"""``OperationsStore`` no Oracle: ações da API sobre eventos e DLQ (ARCHITECTURE §4.4).
+"""``OperationsStore`` no PostgreSQL: ações da API sobre eventos e DLQ (ARCHITECTURE §4.4).
 
 Retries são **uma transação** condicionada a ``resolution IS NULL``, nesta ordem (contrato do
 port): ``UPDATE`` do item primeiro, que trava a linha e serializa pedidos concorrentes;
@@ -12,10 +12,8 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from typing import Any, TypeVar
 
-import oracledb
-
-from ohip_streaming.adapters.oracle.database import Cursor, Session, query, transaction
-from ohip_streaming.adapters.oracle.rows import stored_event_from_row
+from ohip_streaming.adapters.postgres.database import Cursor, Session, query, transaction
+from ohip_streaming.adapters.postgres.rows import stored_event_from_row
 from ohip_streaming.application.errors import StoreOperationError
 from ohip_streaming.application.ports import DlqItem, DlqStage, StoredEvent
 from ohip_streaming.domain.messages import QueueMessage
@@ -26,31 +24,31 @@ T = TypeVar("T")
 EVENT_BY_UID_SQL = """
 SELECT id, chain_code, subscription_id, event_ts, payload, processing_status, received_at
   FROM ohip_event_raw
- WHERE unique_event_id = :uid"""
+ WHERE unique_event_id = %(uid)s"""
 EVENT_BY_ID_SQL = """
 SELECT id, chain_code, subscription_id, event_ts, payload, processing_status, received_at
   FROM ohip_event_raw
- WHERE id = :id"""
+ WHERE id = %(id)s"""
 
 ENQUEUE_SQL = """
 INSERT INTO ohip_outbox (
     id, event_raw_id, chain_code, unique_event_id, exchange_name, routing_key, message,
     schema_version
 ) VALUES (
-    ohip_outbox_seq.NEXTVAL, :event_raw_id, :chain_code, :unique_event_id, :exchange_name,
-    :routing_key, :message, :schema_version
+    nextval('ohip_outbox_seq'), %(event_raw_id)s, %(chain_code)s, %(unique_event_id)s,
+    %(exchange_name)s, %(routing_key)s, %(message)s, %(schema_version)s
 )
-RETURNING id INTO :new_id"""
+RETURNING id"""
 
 DLQ_ITEM_SQL = """
 SELECT id, stage, chain_code, event_raw_id, outbox_id, unique_event_id, resolution
   FROM ohip_dlq
- WHERE id = :id"""
+ WHERE id = %(id)s"""
 
 REQUEST_CONSUME_RETRY_SQL = """
 UPDATE ohip_dlq
-   SET retry_requested_at = SYS_EXTRACT_UTC(SYSTIMESTAMP), retry_requested_by = :requested_by
- WHERE id = :id
+   SET retry_requested_at = statement_timestamp(), retry_requested_by = %(requested_by)s
+ WHERE id = %(id)s
    AND stage = 'CONSUME'
    AND resolution IS NULL
    AND retry_requested_at IS NULL"""
@@ -58,28 +56,26 @@ UPDATE ohip_dlq
 RESOLVE_SQL = """
 UPDATE ohip_dlq
    SET resolution = 'RETRIED',
-       resolved_at = SYS_EXTRACT_UTC(SYSTIMESTAMP),
-       resolved_by = :resolved_by,
+       resolved_at = statement_timestamp(),
+       resolved_by = %(resolved_by)s,
        retry_requested_at = NULL,
        retry_requested_by = NULL
- WHERE id = :id
+ WHERE id = %(id)s
    AND resolution IS NULL"""
 
-NEXT_OUTBOX_ID_SQL = "SELECT ohip_outbox_seq.NEXTVAL FROM dual"
-
-# INSERT ... SELECT não aceita RETURNING no 11g: o id vem antes, da sequence.
 COPY_OUTBOX_SQL = """
 INSERT INTO ohip_outbox (
     id, event_raw_id, chain_code, unique_event_id, exchange_name, routing_key, message,
     schema_version
 )
-SELECT :new_id, event_raw_id, chain_code, unique_event_id, exchange_name, routing_key, message,
-       schema_version
+SELECT nextval('ohip_outbox_seq'), event_raw_id, chain_code, unique_event_id, exchange_name,
+       routing_key, message, schema_version
   FROM ohip_outbox
- WHERE id = :outbox_id"""
+ WHERE id = %(outbox_id)s
+RETURNING id"""
 
 
-class OracleOperationsStore:
+class PostgresOperationsStore:
     """Implementa ``OperationsStore``. Use com uma ``PooledSession``."""
 
     def __init__(self, session: Session) -> None:
@@ -128,12 +124,11 @@ class OracleOperationsStore:
         def body(cursor: Cursor) -> int | None:
             if not self._resolve(cursor, item_id, requested_by):
                 return None
-            cursor.execute(NEXT_OUTBOX_ID_SQL)
-            (new_id,) = cursor.fetchone()
-            cursor.execute(COPY_OUTBOX_SQL, {"new_id": new_id, "outbox_id": outbox_id})
-            if cursor.rowcount != 1:
+            cursor.execute(COPY_OUTBOX_SQL, {"outbox_id": outbox_id})
+            row = cursor.fetchone()
+            if row is None:
                 raise StoreOperationError(f"linha {outbox_id} da outbox não existe")
-            return int(new_id)
+            return int(row[0])
 
         return await self._write(body)
 
@@ -166,8 +161,6 @@ class OracleOperationsStore:
     def _insert_message(
         cursor: Cursor, chain_code: str, raw_event_id: int, message: QueueMessage, exchange: str
     ) -> int:
-        new_id = cursor.var(int)
-        cursor.setinputsizes(message=oracledb.DB_TYPE_CLOB)
         cursor.execute(
             ENQUEUE_SQL,
             {
@@ -178,10 +171,9 @@ class OracleOperationsStore:
                 "routing_key": message.routing_key,
                 "message": message.body,
                 "schema_version": message.schema_version,
-                "new_id": new_id,
             },
         )
-        (value,) = new_id.getvalue()
+        (value,) = cursor.fetchone()
         return int(value)
 
     async def _query(self, statement: str, parameters: dict[str, Any]) -> list[Sequence[Any]]:

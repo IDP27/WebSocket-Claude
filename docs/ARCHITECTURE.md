@@ -9,11 +9,11 @@
                    ┌───────────────────────── VM Linux (systemd) ──────────────────────────┐
 OPERA Cloud        │                                                                        │
     │ eventos      │  ┌──────────────┐  1 transação   ┌──────────────────────────────┐      │
-    ▼              │  │ ohip-consumer│ ─────────────▶ │ Oracle 11g                   │      │
+    ▼              │  │ ohip-consumer│ ─────────────▶ │ PostgreSQL 15+               │      │
 OHIP Gateway ─wss──┼─▶│ (1 por chain)│  (lease+epoch) │ EVENT_RAW + OFFSET + OUTBOX  │      │
     ▲              │  └──────────────┘                │ LEASE · DLQ · STATUS · REPLAY│      │
     │ REST GET     │                                  └──────┬────────────────▲──────┘      │
-    │              │      Redis ◀──── token, caches,         │ lê PENDING     │ MERGE       │
+    │              │      Redis ◀──── token, caches,         │ lê PENDING     │ ON CONFLICT │
     │              │                  métricas               ▼                │ condicional │
     │              │                               ┌───────────────┐   ┌──────┴───────┐     │
     └──────────────┼───────────────────────────────│ ohip-enricher │◀──│ RabbitMQ     │◀─┐  │
@@ -30,7 +30,7 @@ OHIP Gateway ─wss──┼─▶│ (1 por chain)│  (lease+epoch) │ EVENT_
 
 Princípios:
 
-1. **Oracle é a fonte da verdade**, inclusive da liderança. Evento bruto, offset e outbox nascem na mesma transação; a trava de instância única é um *lease* com epoch no Oracle (ADR-0008). Redis só acelera (token, caches, métricas); sem ele o sistema fica mais lento, nunca incorreto nem parado.
+1. **O banco (PostgreSQL, ADR-0021) é a fonte da verdade**, inclusive da liderança. Evento bruto, offset e outbox nascem na mesma transação; a trava de instância única é um *lease* com epoch no banco (ADR-0008). Redis só acelera (token, caches, métricas); sem ele o sistema fica mais lento, nunca incorreto nem parado.
 2. **Um único caminho de escrita por chain.** Um `ohip-consumer` por chain, gravação sequencial, preservando a ordem garantida pelo OHIP por (appKey, chainCode, gateway).
 3. **Nenhum evento é descartado no caminho de entrada.** Ou ele é commitado (como evento, duplicado ou item de DLQ) e o offset avança, ou o offset não avança e o OHIP reenvia.
 4. **Nada lento no laço do WebSocket.** Leitura só enfileira; gravação em outra tarefa; publicação e enriquecimento desacoplados pela outbox.
@@ -40,14 +40,14 @@ Princípios:
 
 | Serviço systemd | Tecnologia | Responsabilidade | Instâncias |
 | --- | --- | --- | --- |
-| `ohip-consumer@<chain>` | asyncio + `websockets`; executor Oracle de 1 thread (escrita) + 1 conexão de controle | Protocolo OHIP, heartbeat, token, gravação em micro-lotes, DLQ `CONSUME`, status, lease, replay | **1 por chain** (template systemd `@`) |
+| `ohip-consumer@<chain>` | asyncio + `websockets`; executor de banco de 1 thread (escrita) + 1 conexão de controle | Protocolo OHIP, heartbeat, token, gravação em micro-lotes, DLQ `CONSUME`, status, lease, replay | **1 por chain** (template systemd `@`) |
 | `ohip-publisher` | asyncio + `aio-pika` | Outbox → RabbitMQ com publisher confirms, ordem por chain, backoff, `FAILED` + DLQ | 1 (lease `publisher`) |
-| `ohip-enricher` | asyncio + `aio-pika` + `httpx` | Consome fila, lê o bruto no Oracle, cache, REST do OHIP, `MERGE` condicional | N |
+| `ohip-enricher` | asyncio + `aio-pika` + `httpx` | Consome fila, lê o bruto no banco, cache, REST do OHIP, `INSERT ... ON CONFLICT` condicional | N |
 | `ohip-api` | FastAPI + Uvicorn | Saúde, métricas, consulta, comandos administrativos | 1+ workers |
 | `ohip-admin` | Flask + Gunicorn + Jinja2 (+HTMX) | Painel operacional; **só fala com a `ohip-api`** | 1+ workers |
 | Nginx | — | TLS, autenticação, roteamento `/api` e `/admin` | 1 |
 
-O consumer **nunca** roda dentro de Uvicorn/Gunicorn (ADR-0001). A comunicação consumer ↔ API é pelo Oracle (`OHIP_CONSUMER_STATUS`, `OHIP_OFFSET`, `OHIP_REPLAY_REQUEST`). Units systemd com `RestartSec=10` (regra dos 10 s, ADR-0007).
+O consumer **nunca** roda dentro de Uvicorn/Gunicorn (ADR-0001). A comunicação consumer ↔ API é pelo banco (`OHIP_CONSUMER_STATUS`, `OHIP_OFFSET`, `OHIP_REPLAY_REQUEST`). Units systemd com `RestartSec=10` (regra dos 10 s, ADR-0007).
 
 ## 3. Protocolo OHIP
 
@@ -76,7 +76,7 @@ O consumer **nunca** roda dentro de Uvicorn/Gunicorn (ADR-0001). A comunicação
 ### 3.1 Máquina de estados do consumer
 
 ```
-          ┌────────────┐  lease Oracle (epoch++)   ┌────────────┐
+          ┌────────────┐  lease no banco (epoch++)   ┌────────────┐
  start ──▶│ ACQUIRING  │──────────────────────────▶│  WAITING   │ espera ≥10 s desde last_disconnect_at
           └────────────┘  (ocupado: tenta de novo) └─────┬──────┘ (desconhecido → 10 s fixos)
                 ▲                                        ▼
@@ -97,7 +97,7 @@ O consumer **nunca** roda dentro de Uvicorn/Gunicorn (ADR-0001). A comunicação
                 └────────────── WAITING ◀─────────────────────────┴───┬─────────┬───┘
                                    ▲                                   │         │ token perto do exp,
                                    │ servidor fecha (1000) ou timeout  │         │ replay, fila travada,
-                                   └──────────────────── DRAINING ◀────┘         │ Oracle fora, SIGTERM
+                                   └──────────────────── DRAINING ◀────┘         │ banco fora, SIGTERM
                                                         (complete enviado) ◀─────┘
  close 4403 / 4406, ou mensagem grande demais N vezes ──▶ STOPPED (alerta; exige ação humana)
 ```
@@ -113,23 +113,24 @@ O consumer **nunca** roda dentro de Uvicorn/Gunicorn (ADR-0001). A comunicação
 2. **Laço de leitura** (`ohip_ws`): valida o envelope (`id`, `type`), marca prova de vida e coloca a mensagem bruta numa fila interna limitada por quantidade **e** por bytes (`INTAKE_QUEUE_MAX`, padrão 5.000; `INTAKE_QUEUE_MAX_BYTES`, padrão 64 MiB). Nunca faz I/O de banco.
    - **Classificação dos frames** (Fase 5): só `next` com o `id` da assinatura atual vai para a fila. `ping`/`pong` são heartbeat. `error` ou `complete` com o nosso `id` encerram a assinatura: o laço para de enfileirar, loga o motivo (payload do `error` passa pelo `redact`), fecha a conexão com 1000, grava `last_disconnect_at` e reconecta pelo offset **commitado** com backoff exponencial e a regra dos 10 s (nunca vira DLQ nem fica parado em silêncio). Frames de outro `id` ou de tipo desconhecido: log + métrica, ignorados.
    - **Fila cheia**: o laço **espera** espaço (`await queue.put`) e para de ler o socket. **Nunca descarta.** O heartbeat (envio de `ping`) segue em outra tarefa; o servidor tolera 180 s sem `pong`.
-   - Se a fila ficar cheia por mais de `INTAKE_STALL_TIMEOUT` (padrão 120 s), ou se o Oracle estiver fora (item 5), a conexão é marcada como **envenenada** (`poisoned`):
+   - Se a fila ficar cheia por mais de `INTAKE_STALL_TIMEOUT` (padrão 120 s), ou se o banco estiver fora (item 5), a conexão é marcada como **envenenada** (`poisoned`):
      1. o `put` pendente é cancelado e o que estiver na fila e no lote não commitado é descartado;
      2. o escritor para: **nada mais recebido nesta conexão é gravado**, nem mesmo o que chegar durante a drenagem (sem isso, uma mensagem posterior moveria o offset por cima das descartadas);
      3. envia `complete`, ignora as mensagens seguintes e espera o servidor fechar (com `DRAIN_TIMEOUT`);
      4. reconecta pelo último offset **commitado**. O OHIP reenvia o que faltou.
 
      Cenário obrigatório no servidor simulado (Fase 5): fila cheia + mensagens chegando durante a drenagem → nenhum offset pulado.
-3. **Tarefa de gravação** (uma por consumer): remove números de cartão (formatos de cartão que passam no Luhn) dos valores do `detail` e do payload antes de qualquer gravação, inclusive na DLQ (§11). A limpeza é estrutural: campos de identificação (offset, `uniqueEventId`, `primaryKey`, ids) nunca são alterados, para o retry da DLQ continuar funcionando. Junta um micro-lote (até `BATCH_MAX_EVENTS`, padrão 200, ou `BATCH_MAX_WAIT_MS`, padrão 200 ms), converte cada mensagem no domínio (`Event`) e chama `ProcessEventBatch` no executor Oracle de 1 thread. Mensagens que o domínio rejeita (JSON inválido, sem `uniqueEventId`, offset fora de `^[0-9]{1,20}$`, campos acima dos limites da DDL, campos obrigatórios nulos) viram itens de DLQ `CONSUME` **no mesmo lote**.
+3. **Tarefa de gravação** (uma por consumer): remove números de cartão (formatos de cartão que passam no Luhn) dos valores do `detail` e do payload antes de qualquer gravação, inclusive na DLQ (§11). A limpeza é estrutural: campos de identificação (offset, `uniqueEventId`, `primaryKey`, ids) nunca são alterados, para o retry da DLQ continuar funcionando. Junta um micro-lote (até `BATCH_MAX_EVENTS`, padrão 200, ou `BATCH_MAX_WAIT_MS`, padrão 200 ms), converte cada mensagem no domínio (`Event`) e chama `ProcessEventBatch` no executor do banco de 1 thread. Mensagens que o domínio rejeita (JSON inválido, sem `uniqueEventId`, offset fora de `^[0-9]{1,20}$`, campos acima dos limites da DDL, campos obrigatórios nulos) viram itens de DLQ `CONSUME` **no mesmo lote**.
 4. **Transação do lote** (ADR-0008, ADR-0009):
-   1. `INSERT` em lote em `OHIP_EVENT_RAW` com `executemany(..., batcherrors=True)`.
-      - ORA-00001 em `ohip_event_raw_uq_evt` (mesmo `uniqueEventId`) ou em `ohip_event_raw_uq_off` (mesmos chain, offset e `primaryKey`) = **duplicado**: ignorado, métrica + log.
-      - **Qualquer outro erro por linha** → item de DLQ `CONSUME` com a mensagem bruta, na mesma transação.
+   1. `INSERT` em lote em `OHIP_EVENT_RAW` (ADR-0022): `executemany` com `ON CONFLICT ON CONSTRAINT ohip_event_raw_uq_evt DO NOTHING RETURNING`; erro de dado numa linha → desfaz o savepoint e grava linha a linha, cada uma no seu savepoint.
+      - Conflito em `ohip_event_raw_uq_evt` (mesmo `uniqueEventId`) ou `23505` em `ohip_event_raw_uq_off` (mesmos chain, offset e `primaryKey`) = **duplicado**: ignorado, métrica (+ log no `uq_off`).
+      - Falta de recurso (classe `53` etc.) numa linha desfaz o lote inteiro como banco indisponível.
+      - **Qualquer outro erro por linha** (inclusive `23505` na PK) → item de DLQ `CONSUME` com a mensagem bruta, na mesma transação.
    2. `INSERT` em `OHIP_OUTBOX` (`PENDING`) só para os eventos novos e permitidos (`OHIP_EVENT_ALLOWLIST`, vazio = todos; fora da lista → `processing_status = IGNORED`, sem outbox — DV-13).
    3. `UPDATE OHIP_OFFSET` com o offset da **última mensagem do lote que tinha offset válido** (gravada, duplicada ou DLQ por outro motivo), na ordem de chegada. Se nenhuma mensagem do lote tiver offset válido, `OHIP_OFFSET` não é alterado.
    4. **Barreira (fencing), como último comando**: `UPDATE ohip_lease SET last_write_at = <agora do banco> WHERE lease_name = 'consumer:<chain>' AND epoch = :epoch`. Zero linhas → `ROLLBACK`, log crítico, encerra. O lock na linha do lease dura só até o commit (milissegundos), então a renovação não fica bloqueada por uma escrita lenta (ADR-0008).
    5. `COMMIT`. Só agora o offset está confirmado. Depois do commit: `ohip:seen:<uniqueEventId>` no Redis (best-effort).
-5. **Falha do lote inteiro** (ex.: erro de banco que não é por linha): rollback; tenta de novo com backoff até `BATCH_MAX_RETRIES` (padrão 5). Se persistir com o Oracle respondendo, **bisseção em ordem**: divide o lote até isolar a mensagem culpada, commitando primeiro o prefixo (o offset avança só pelo prefixo commitado), depois a culpada vai para a DLQ `CONSUME` e o sufixo segue (ADR-0009). **Disjuntor** (ADR-0011): se uma segunda culpada aparecer sem nenhum progresso desde a anterior (progresso = commit com evento gravado ou reconhecido como duplicado, como no replay), a falha é tratada como sistêmica e o lote levanta "banco indisponível" em vez de mandar o fluxo inteiro para a DLQ. O contador vive com o processo e não zera ao disparar (reconexões não mandam mais nada para a DLQ); o restart do processo isola uma culpada por vez (RUNBOOK). Erros de espaço do Oracle (ORA-01653/01654/01688/01691/30036) já são classificados como indisponibilidade pelo adapter. Se o Oracle estiver fora: conexão envenenada (item 2), estado `WAITING` sem assinar até o Oracle voltar, alerta. Nada é perdido porque o offset não avançou.
+5. **Falha do lote inteiro** (ex.: erro de banco que não é por linha): rollback; tenta de novo com backoff até `BATCH_MAX_RETRIES` (padrão 5). Se persistir com o banco respondendo, **bisseção em ordem**: divide o lote até isolar a mensagem culpada, commitando primeiro o prefixo (o offset avança só pelo prefixo commitado), depois a culpada vai para a DLQ `CONSUME` e o sufixo segue (ADR-0009). **Disjuntor** (ADR-0011): se uma segunda culpada aparecer sem nenhum progresso desde a anterior (progresso = commit com evento gravado ou reconhecido como duplicado, como no replay), a falha é tratada como sistêmica e o lote levanta "banco indisponível" em vez de mandar o fluxo inteiro para a DLQ. O contador vive com o processo e não zera ao disparar (reconexões não mandam mais nada para a DLQ); o restart do processo isola uma culpada por vez (RUNBOOK). Falta de recurso do banco (SQLSTATE classe `53`: disco, memória, conexões) já é classificada como indisponibilidade pelo adapter (ADR-0021 §5). Se o banco estiver fora: conexão envenenada (item 2), estado `WAITING` sem assinar até o banco voltar, alerta. Nada é perdido porque o offset não avançou.
 6. **Mensagem grande demais** (`WS_MAX_MESSAGE_BYTES`, padrão 16 MiB): o socket fecha; reconecta. Se a mesma condição se repetir `OVERSIZE_MAX_REPEATS` vezes (padrão 3) no mesmo offset → `STOPPED` + alerta crítico (evita laço infinito).
 
 ### 4.2 Publicação (publisher) — ADR-0002
@@ -138,10 +139,10 @@ Para cada chain com trabalho, o publisher pega a **cabeça da fila** daquela cha
 
 ```sql
 SELECT id, exchange_name, routing_key, message, attempts, next_attempt_at
-  FROM (SELECT o.* FROM ohip_outbox o
-         WHERE o.chain_code = :chain AND o.status = 'PENDING'
-         ORDER BY o.id)
- WHERE ROWNUM <= :batch
+  FROM ohip_outbox
+ WHERE chain_code = %(chain)s AND status = 'PENDING'
+ ORDER BY id
+ LIMIT %(batch)s
 ```
 
 - Se a primeira linha tiver `next_attempt_at` no futuro, **a chain inteira espera** (não pula a cabeça).
@@ -155,11 +156,11 @@ SELECT id, exchange_name, routing_key, message, attempts, next_attempt_at
 ### 4.3 Enriquecimento e normalização (enricher)
 
 1. Consome a fila `ohip.enricher` (bindings configuráveis) e deduplica por `message_id`, **exceto** mensagens do exchange `ohip.reprocess` (§4.4), que sempre são processadas. O id só é marcado como visto depois do processamento com sucesso.
-2. Lê o **payload bruto do Oracle** por `raw_event_id` (a mensagem da fila tem `detail` mascarado e não serve para normalizar).
+2. Lê o **payload bruto do banco** por `raw_event_id` (a mensagem da fila tem `detail` mascarado e não serve para normalizar).
 3. Aplica a regra do `eventName` (RF-08). Sem regra → `processing_status = UNMAPPED` + métrica.
 4. Se a regra pedir, chama a REST do OHIP com `primaryKey` + `hotelId`, usando cache e respeitando HTTP 429 (RF-09).
-5. Grava com **`MERGE` condicional**: cada tabela de domínio guarda `source_offset_num NUMBER(20)` (o offset do evento, que é uma string só de dígitos, convertido para número). O `UPDATE` só acontece se o evento recebido **não for mais antigo** (`WHEN MATCHED THEN UPDATE ... WHERE t.source_offset_num <= :offset_num`). Assim, N enrichers em paralelo não sobrescrevem estado novo com antigo, e reprocessar o mesmo evento reaplica a regra (idempotente). Usa o offset, e não o `id` do bruto, porque um evento antigo regravado por retry de DLQ ganha `id` novo (ADR-0006). Atualização ignorada pela condição gera a métrica `ohip_merge_skipped_total`; muitas seguidas (ex.: OHIP reiniciou os offsets, D-6) disparam alerta e seguem o procedimento do RUNBOOK.
-   - **Toda tabela de domínio tem `UNIQUE` na chave natural** (as colunas do `ON`). Com N enrichers, dois `MERGE` simultâneos da mesma entidade nova podem ambos cair no `WHEN NOT MATCHED`: o `UNIQUE` faz o segundo falhar com ORA-00001 (nova tentativa, que vira `UPDATE`) em vez de criar duas linhas em silêncio. Nenhuma coluna da chave aceita `NULL` (`t.col = NULL` nunca casa e cada evento inseriria uma linha): a regra grava `'#CHAIN'` no lugar do hotel ausente, e o adapter recusa chave nula.
+5. Grava com **`INSERT ... ON CONFLICT DO UPDATE` condicional** (ADR-0022 §5): cada tabela de domínio guarda `source_offset_num numeric(20)` (o offset do evento, que é uma string só de dígitos, convertido para número). O `UPDATE` só acontece se o evento recebido **não for mais antigo** (`ON CONFLICT (chave) DO UPDATE ... WHERE t.source_offset_num <= EXCLUDED.source_offset_num`). Assim, N enrichers em paralelo não sobrescrevem estado novo com antigo, e reprocessar o mesmo evento reaplica a regra (idempotente). Usa o offset, e não o `id` do bruto, porque um evento antigo regravado por retry de DLQ ganha `id` novo (ADR-0006). Atualização ignorada pela condição gera a métrica `ohip_merge_skipped_total`; muitas seguidas (ex.: OHIP reiniciou os offsets, D-6) disparam alerta e seguem o procedimento do RUNBOOK.
+   - **Toda tabela de domínio tem `UNIQUE` na chave natural** (as colunas do `ON CONFLICT`), condição para o `ON CONFLICT` funcionar. Com N enrichers, o PostgreSQL serializa dois `INSERT` simultâneos da mesma entidade nova: o segundo vira `UPDATE` (atômico, sem falha nem duas linhas). Nenhuma coluna da chave aceita `NULL` (`NULL` nunca conflita e cada evento inseriria uma linha): a regra grava `'#CHAIN'` no lugar do hotel ausente, e o adapter recusa chave nula.
 6. Atualiza `processing_status` (`NORMALIZED`/`ENRICHED`/`FAILED`); falha após N tentativas → DLQ `NORMALIZE`/`ENRICH`.
 
 ### 4.4 Reprocessamento
@@ -172,10 +173,10 @@ SELECT id, exchange_name, routing_key, message, attempts, next_attempt_at
 
 ### 4.5 Ordem e idempotência (resumo)
 
-- Ordem até o Oracle: um consumer por chain, um executor de 1 thread, lotes em ordem de chegada.
+- Ordem até o banco: um consumer por chain, um executor de 1 thread, lotes em ordem de chegada.
 - Ordem na fila: cabeça por chain, sem pular (§4.2).
-- Idempotência: `UNIQUE(unique_event_id)` e `UNIQUE(chain_code, offset_value, primary_key)` no Oracle; Redis só depois do commit; consumidores da fila deduplicam por `message_id`; enricher com `MERGE` condicional por offset.
-- Offset: string `^[0-9]{1,20}$` em `VARCHAR2(20)` (ADR-0006). Comparação numérica só em métricas, na validação de replay e na condição do `MERGE`.
+- Idempotência: `UNIQUE(unique_event_id)` e `UNIQUE(chain_code, offset_value, primary_key)` no banco; Redis só depois do commit; consumidores da fila deduplicam por `message_id`; enricher com `INSERT ... ON CONFLICT` condicional por offset.
+- Offset: string `^[0-9]{1,20}$` em `varchar(20)` (ADR-0006). Comparação numérica só em métricas, na validação de replay e na condição do `ON CONFLICT`.
 
 ### 4.6 Replay
 
@@ -188,36 +189,37 @@ SELECT id, exchange_name, routing_key, message, attempts, next_attempt_at
 
 Como a troca do offset acontece com a conexão fechada, nenhum lote pode sobrescrevê-la. Um crash antes do passo 3 deixa o pedido `PENDING`, e ele é aplicado antes do próximo `subscribe`. Um crash depois do passo 3 reinicia já a partir de `from_offset`.
 
-## 5. Modelo de dados (Oracle 11g)
+## 5. Modelo de dados (PostgreSQL 15+, ADR-0021)
 
-DDL em [`sql/`](../sql/) (rascunho, **não executar**). Identificadores ≤ 30 caracteres; IDs por `SEQUENCE` explícita no `INSERT`.
+DDL em [`sql/postgres/`](../sql/postgres/) (rascunho, aplicado pelo DBA; o projeto só a aplica no contêiner descartável do `make test-db`). Colunas `timestamptz`; payload e mensagens em `text`, como recebidos; IDs por `SEQUENCE` explícita (`ohip_outbox_seq` com `CACHE 1`, ADR-0021 §4).
 
 | Tabela | Finalidade | Destaques |
 | --- | --- | --- |
-| `OHIP_EVENT_RAW` | Evento bruto, fonte da verdade | `UNIQUE(unique_event_id)`, `UNIQUE(chain_code, offset_value, primary_key)`; `payload CLOB`; `processing_status` |
+| `OHIP_EVENT_RAW` | Evento bruto, fonte da verdade | `UNIQUE(unique_event_id)`, `UNIQUE(chain_code, offset_value, primary_key)`; `payload text`; `processing_status` |
 | `OHIP_OFFSET` | Último offset confirmado | PK `chain_code` |
 | `OHIP_LEASE` | Liderança com prazo e epoch | PK `lease_name` (`consumer:<chain>`, `publisher`); `epoch`, `owner`, `expires_at`, `last_write_at` (hora do banco); linhas semeadas no provisionamento |
 | `OHIP_OUTBOX` | Mensagens a publicar | `status IN (PENDING, SENT, FAILED)`; índice `(chain_code, status, id)` |
-| `OHIP_DLQ` | Falhas por estágio | `stage IN (CONSUME, PUBLISH, NORMALIZE, ENRICH)`; `raw_message CLOB` |
+| `OHIP_DLQ` | Falhas por estágio | `stage IN (CONSUME, PUBLISH, NORMALIZE, ENRICH)`; `raw_message text` (NUL e surrogates trocados por U+FFFD) |
 | `OHIP_CONSUMER_STATUS` | Estado da conexão | último ping/pong/mensagem, `last_disconnect_at`, fechamentos consecutivos, próxima tentativa |
-| `OHIP_REPLAY_REQUEST` | Pedidos de replay auditáveis | no máximo 1 `PENDING` por chain (índice único por função) |
-| Tabelas de domínio | Normalizadas | **Só após a Q-1**; sempre com `source_event_raw_id` e `source_offset_num`. Chave natural `(chain_code, hotel_id, primary_key)` com **`UNIQUE`** e colunas `NOT NULL`: perfis podem vir sem hotel, e a regra grava `'#CHAIN'` (um `NULL` não casa no `ON` do `MERGE`, §4.3) |
+| `OHIP_REPLAY_REQUEST` | Pedidos de replay auditáveis | no máximo 1 `PENDING` por chain (índice único parcial `ohip_replay_ux_pending`) |
+| Tabelas de domínio | Normalizadas | **Só após a Q-1**; sempre com `source_event_raw_id` e `source_offset_num`. Chave natural `(chain_code, hotel_id, primary_key)` com **`UNIQUE`** e colunas `NOT NULL`: perfis podem vir sem hotel, e a regra grava `'#CHAIN'` (um `NULL` nunca conflita no `ON CONFLICT`, §4.3) |
 
 ### 5.1 Retenção e expurgo
 
-Processo `ohip-purge` (timer diário do systemd, usuário Oracle `ohip_purge`; ADR-0020 §2), em lotes (`DELETE ... WHERE ROWNUM <= :n`, commit por lote, pausa entre lotes e prazo total), nesta ordem:
+Processo `ohip-purge` (timer diário do systemd, papel `ohip_purge`; ADR-0020 §2), em lotes (`DELETE ... WHERE id IN (SELECT id ... LIMIT %(n)s)`, commit por lote, pausa entre lotes e prazo total), nesta ordem:
 
 1. `OHIP_DLQ` resolvida há mais de 90 dias.
 2. `OHIP_OUTBOX` `SENT` há mais de 90 dias, sem item de DLQ apontando para ela.
 3. `OHIP_OUTBOX` `FAILED` criada há mais de 90 dias e já sem item de DLQ (o item `PUBLISH` foi resolvido e expurgado no passo 1; o retry cria linha nova e a antiga ficaria `FAILED` para sempre).
 4. `OHIP_EVENT_RAW` com mais de 90 dias **e** `NOT EXISTS` em outbox e DLQ (linhas `PENDING`, `FAILED` com DLQ aberta e DLQ aberta seguram o bruto até serem resolvidas).
 
-Corte pelo relógio do banco. Padrão `PURGE_DRY_RUN=true` (só conta). Tabelas de domínio não têm chave estrangeira para o bruto. Sem particionamento (licença adicional no 11g). Prazos finais dependem da Q-9.
+Corte pelo relógio do banco. Padrão `PURGE_DRY_RUN=true` (só conta). Tabelas de domínio não têm chave estrangeira para o bruto. Sem particionamento por enquanto (com o volume da Q-8, avaliar particionamento nativo por data com ADR). Prazos finais dependem da Q-9.
 
 ### 5.2 Volume e desempenho
 
-- Inserts em lote com `executemany` e `setinputsizes` para CLOB.
-- IDs do lote reservados de uma vez: `SELECT ohip_event_raw_seq.NEXTVAL FROM dual CONNECT BY LEVEL <= :n`.
+- Inserts em lote com `executemany` do psycopg (pipeline: uma ida ao banco por lote); erro de dado numa linha → savepoint e caminho linha a linha (ADR-0022).
+- IDs do lote reservados de uma vez: `SELECT nextval('ohip_event_raw_seq') FROM generate_series(1, %(n)s)`.
+- Horário dos comandos com `statement_timestamp()` (permite índice nos filtros por data; ADR-0021 §4).
 - Consumer: 1 conexão de escrita (thread única) + 1 conexão de controle (lease, status, replay). API: pool de sessões.
 
 ## 6. Contrato da mensagem na fila (v1)
@@ -251,12 +253,12 @@ Propriedades AMQP: `message_id=<uniqueEventId>`, `content_type=application/json`
 ```
 
 - `event_ts` e `received_at` saem sempre em UTC, ISO 8601 com milissegundos e `Z`. O `timestamp` do OHIP vem sem fuso e é interpretado no fuso `OHIP_EVENT_TIMEZONE` (D-3); o valor original continua no payload bruto. `timestamp` ilegível → `event_ts: null`.
-- `detail` passa pela máscara LGPD (ADR-0011, até a resposta da Q-9): no módulo `PROFILE` tudo é mascarado, exceto uma lista de elementos seguros (tipos, indicadores, códigos); nos demais módulos, os elementos cujo nome casa com padrões de dado pessoal do guia (`NAME`, `NAME2`, `XFIRST NAME`, `ADDRESS1`, `TAX NUMBER`, `ID PLACE`, `EMAIL`, `PHONE`, `BIRTH DATE`, `COMMENTS`, `UDF CHAR1`, cartão etc.) mais a lista configurável. Quem precisa do valor real lê o Oracle com permissão.
+- `detail` passa pela máscara LGPD (ADR-0011, até a resposta da Q-9): no módulo `PROFILE` tudo é mascarado, exceto uma lista de elementos seguros (tipos, indicadores, códigos); nos demais módulos, os elementos cujo nome casa com padrões de dado pessoal do guia (`NAME`, `NAME2`, `XFIRST NAME`, `ADDRESS1`, `TAX NUMBER`, `ID PLACE`, `EMAIL`, `PHONE`, `BIRTH DATE`, `COMMENTS`, `UDF CHAR1`, cartão etc.) mais a lista configurável. Quem precisa do valor real lê o banco com permissão.
 - Mudança incompatível → `schema_version` novo + ADR (RNF-15). Campo novo opcional não muda a versão.
 
 ## 7. Liderança, cache e Redis
 
-**Liderança (ADR-0008)**: `OHIP_LEASE` no Oracle, com prazo (`LEASE_TTL`, padrão 30 s, renovado a cada 10 s pela conexão de controle de cada processo com lease) e `epoch` incrementado a cada aquisição. Toda transação de escrita termina com a barreira de epoch. Vale para `consumer:<chain>` e `publisher`. Não há trava no Redis (DV-12).
+**Liderança (ADR-0008)**: `OHIP_LEASE` no banco, com prazo (`LEASE_TTL`, padrão 30 s, renovado a cada 10 s pela conexão de controle de cada processo com lease) e `epoch` incrementado a cada aquisição. Toda transação de escrita termina com a barreira de epoch. Vale para `consumer:<chain>` e `publisher`. Não há trava no Redis (DV-12).
 
 | Uso do Redis | Chave | Validade | Observação |
 | --- | --- | --- | --- |
@@ -265,7 +267,7 @@ Propriedades AMQP: `message_id=<uniqueEventId>`, `content_type=application/json`
 | Dedup do enricher | `ohip:processed:<message_id>` | configurável | marcado só depois do sucesso |
 | Recurso REST | `ohip:rest:<chain>:<modulo>:<hotel>:<primaryKey>` | `ENRICHER_REST_CACHE_TTL_S` (45 s) | coalesce rajadas; guarda também o "não encontrado" (ADR-0019) |
 | LOV | `ohip:lov:<hotel>:<tipo>` | 24 h | |
-| Status da API | `ohip:api:status` | 5 s | protege o Oracle do polling do painel (mais cópia local e um cálculo por worker de cada vez) |
+| Status da API | `ohip:api:status` | 5 s | protege o banco do polling do painel (mais cópia local e um cálculo por worker de cada vez) |
 | Métricas dos processos | `ohip:metrics:<processo>:<instancia>` + conjunto `ohip:metrics_index` | 60 s | snapshot dos contadores a cada 15 s (§10); a API lê pelo índice, sem `SCAN` |
 
 Redis fora: ingestão e publicação continuam; perdem-se só os atalhos e as métricas de contadores (alerta).
@@ -277,8 +279,8 @@ Redis fora: ingestão e publicação continuam; perdem-se só os atalhos e as m�
 | Chains | uma instância `ohip-consumer@<chain>` por chain | app de cliente vale para 1 chain; máx. 100 apps por conta |
 | Volume por chain | micro-lotes, fila interna limitada, `delta`/filtros, campos mínimos | 1 consumer por stream (limite OHIP) |
 | Publicação | cabeça por chain, lotes | broker |
-| Enriquecimento | N enrichers com `MERGE` condicional | cota REST do OHIP (HTTP 429 → backoff) |
-| API/painel | sem estado, vários workers | Oracle (cache de 5 s) |
+| Enriquecimento | N enrichers com `INSERT ... ON CONFLICT` condicional | cota REST do OHIP (HTTP 429 → backoff) |
+| API/painel | sem estado, vários workers | banco (cache de 5 s) |
 | Disponibilidade | VM única + `Restart=always`; depois VM passiva disputando o lease (padrão ativo/passivo da Oracle) | Q-6 |
 
 ## 9. Arquitetura do código
@@ -292,24 +294,24 @@ entrypoints ──▶ application ──▶ domain
 - `domain/` (Fase 2, ADR-0011): `offset.py` (`Offset`), `identifiers.py` (padrões do OHIP e limites da DDL), `events.py` (`Event`, parser do frame `next`, `RejectedMessage`), `masking.py` (LGPD e cartão), `messages.py` (routing key e contrato v1), `connection.py` (códigos de fechamento, backoff, regra dos 10 s, heartbeat, token), `rules.py` (offset do lote, allowlist, backoff de publicação, replay).
 - `application/ports/` (pacote por contexto desde a refatoração 3 do `/entender`; tudo continua importável de `application.ports`): `common` (`Clock`, `MetricsSink`, `ProcessingStatus`, `DlqStage`, `StoredEvent`), `consumer` (`EventStore`, `SeenCache`, `ConsumerStatusStore`, WebSocket), `auth` (token), `lease`, `publisher` (`OutboxStore`, `MessagePublisher`), `replay`, `operations`, `monitoring` (consultas da API), `enricher` e `purge`. Contratos `ports-por-contexto` (os contextos não se importam entre si; só `common` é compartilhado) e `monitoring-so-le-replay` (`monitoring` lê só `common` e `replay`) no import-linter.
 - `application/use_cases/`: `ProcessEventBatch`, `PublishOutbox`, `RequestReplay`, `ApplyReplay`, `CancelReplay`, `ReprocessEvent`, `RetryDlqItem`, `RetryConsumeDlq`, `EnrichEvent` (+ `RuleRegistry`).
-- `adapters/oracle/` (Fase 3, ADR-0013): `database.py` (pool Thick, `DedicatedSession` para a escrita do consumer, `PooledSession`, transação e barreira), `errors.py` (indisponível × duplicado × falha), `event_store.py`, `outbox_store.py`, `replay_store.py`, `operations_store.py`, `status_store.py`. Lease (Fase 4) e `EnrichmentStore` (Fase 9) ainda não.
-- `adapters/ohip_rest/oauth.py` (Fase 4, ADR-0014): emissor do token OAuth. `adapters/oracle/lease_store.py`: lease do ADR-0008. `adapters/redis/`: dedup rápido, dedup do enricher, cache do token e snapshot de métricas.
+- `adapters/postgres/` (Fase 11, ADR-0021/0022; substituiu o `adapters/oracle/` da Fase 3, ADR-0013): `database.py` (pool do psycopg com `autocommit`, `DedicatedSession` para a escrita do consumer, `PooledSession`, `InlineSession`, transação explícita, savepoint e barreira), `errors.py` (classificação por SQLSTATE: indisponível × duplicado × erro de dado × falha), `rows.py` (UTC, corte em bytes, NUL/surrogate), `event_store.py` (caminhos rápido e lento do lote), `outbox_store.py`, `replay_store.py`, `operations_store.py`, `status_store.py`, `lease_store.py`, `monitoring_store.py`, `enrichment_store.py`, `purge_store.py`.
+- `adapters/ohip_rest/oauth.py` (Fase 4, ADR-0014): emissor do token OAuth. `adapters/postgres/lease_store.py`: lease do ADR-0008. `adapters/redis/`: dedup rápido, dedup do enricher, cache do token e snapshot de métricas.
 - `application/use_cases/token_provider.py` e `lease.py` (Fase 4): `TokenProvider` e `LeaseKeeper`.
 - Fase 5 (ADR-0015): `domain/protocol.py` (mensagens no formato do guia), `application/intake.py` (fila interna), `application/use_cases/consume_chain.py` (`ChainConsumer` e sessão: protocolo, leitura, gravação e drenagem) e `consumer_session.py` (refatoração 4 do `/entender`: `StatusReporter`, `Liveness` e `ControlLoop`), `adapters/ohip_ws/client.py` (`websockets`), `entrypoints/consumer.py` (processo `ohip-consumer`).
 - Fase 6 (ADR-0016): `adapters/rabbitmq/publisher.py` (confirms e topologia), `application/use_cases/publisher_service.py` (laço com lease), `entrypoints/publisher.py` (processo `ohip-publisher`) e `entrypoints/common.py`.
-- Fase 7 (ADR-0017): `application/use_cases/monitoring.py` (consultas com máscara) e o port `MonitoringStore`, `adapters/oracle/monitoring_store.py` (paginação por chave com `ROWNUM`), `InlineSession` em `adapters/oracle/database.py`, `adapters/redis/api_cache.py` (Redis síncrono da API), `adapters/rabbitmq/probe.py` (`/ready`) e `entrypoints/api/` (rotas `def`, autenticação, erros, `/metrics`, processo `ohip-api`).
+- Fase 7 (ADR-0017): `application/use_cases/monitoring.py` (consultas com máscara) e o port `MonitoringStore`, `adapters/postgres/monitoring_store.py` (paginação por chave com `LIMIT`), `InlineSession` em `adapters/postgres/database.py`, `adapters/redis/api_cache.py` (Redis síncrono da API), `adapters/rabbitmq/probe.py` (`/ready`) e `entrypoints/api/` (rotas `def`, autenticação, erros, `/metrics`, processo `ohip-api`).
 - Fase 8 (ADR-0018): `entrypoints/admin/` — `settings.py` (configuração própria `ADMIN_*`), `api_client.py` (cliente síncrono da API, token por perfil e `X-Actor`), `app.py` (blueprint `/admin`, identidade pelos headers do Nginx, CSRF, fragmentos HTMX); desde a refatoração 7 do `/entender`, `app.py` só monta (`build_app`/`create_app`) e o resto fica em `identity.py` (headers, segredo do proxy, perfil e CSRF), `errors.py` (cabeçalhos de segurança, log por requisição e páginas de erro), `templating.py` (filtros e `HTMX_INTEGRITY`), `views.py` (rotas) e `context.py`, `templates/`, `static/` e `server.py` (processo `ohip-admin`, Gunicorn).
-- Fase 9 (ADR-0019, **sem regras até a Q-1**): `application/use_cases/enricher_service.py` (tentativas, DLQ e falhas de infraestrutura), `adapters/oracle/enrichment_store.py` (`MERGE` condicional e DLQ `NORMALIZE`/`ENRICH`), `adapters/ohip_rest/resources.py` (REST do OHIP com rate limit, cache e `Retry-After`), `adapters/rabbitmq/consumer.py` (fila `ohip.enricher`) e `entrypoints/enricher.py` (processo `ohip-enricher`).
-- Fase 10 (ADR-0020): status completo do consumer em `OHIP_CONSUMER_STATUS` (`record_subscribed`, `record_health`, `record_disconnect` com falhas, reconexões e próxima tentativa), expurgo (`application/use_cases/purge.py`, `adapters/oracle/purge_store.py`, `entrypoints/purge.py`), teste de carga (`tests/load/`) e deploy (`deploy/systemd/`, `deploy/nginx/`, `deploy/prometheus/`).
+- Fase 9 (ADR-0019, **sem regras até a Q-1**): `application/use_cases/enricher_service.py` (tentativas, DLQ e falhas de infraestrutura), `adapters/postgres/enrichment_store.py` (`ON CONFLICT` condicional e DLQ `NORMALIZE`/`ENRICH`), `adapters/ohip_rest/resources.py` (REST do OHIP com rate limit, cache e `Retry-After`), `adapters/rabbitmq/consumer.py` (fila `ohip.enricher`) e `entrypoints/enricher.py` (processo `ohip-enricher`).
+- Fase 10 (ADR-0020): status completo do consumer em `OHIP_CONSUMER_STATUS` (`record_subscribed`, `record_health`, `record_disconnect` com falhas, reconexões e próxima tentativa), expurgo (`application/use_cases/purge.py`, `adapters/postgres/purge_store.py`, `entrypoints/purge.py`), teste de carga (`tests/load/`) e deploy (`deploy/systemd/`, `deploy/nginx/`, `deploy/prometheus/`).
 - Apoio comum (refatoração 1 do `/entender`): `domain/backoff.py` (`exponential_backoff`, com teto no expoente) e `application/timing.py` (`sleep_or_stop`, `run_or_stop`): toda espera interrompível pela parada e todo backoff exponencial passam por eles.
 - `entrypoints/`: `consumer.py`, `publisher.py`, `enricher.py`, `purge.py`, `api/`, `admin/`; `common.py` (instância, contadores de alerta) e `runtime.py` (refatoração 6 do `/entender`: log, SIGTERM/SIGINT e snapshot de métricas comuns aos processos assíncronos).
 
-`import-linter` (ADR-0005): `domain`/`application` sem `oracledb`, `websockets`, `fastapi`, `flask`, `aio_pika`, `redis`, `httpx`; `entrypoints.admin` sem `adapters.oracle`, `adapters.redis`, `oracledb`, `redis`.
+`import-linter` (ADR-0005): `domain`/`application` sem `psycopg`, `psycopg_pool`, `websockets`, `fastapi`, `flask`, `aio_pika`, `redis`, `httpx`; `entrypoints.admin` sem `adapters.postgres`, `adapters.redis`, `psycopg`, `psycopg_pool`, `redis`.
 
 ## 10. Observabilidade
 
 - Logs JSON (`structlog`) com `chain_code`, `hotel_id`, `offset`, `unique_event_id`, `subscription_id`, `code_version`. Nunca token, secret, app key ou `detail` sem máscara.
-- **Métricas**: cada processo mantém contadores em memória e grava um snapshot a cada 15 s em `ohip:metrics:<processo>:<instancia>` (Redis, TTL 60 s). O consumer também grava o essencial em `OHIP_CONSUMER_STATUS` (estado, ping/pong, RTT, reconexões, fechamentos). O `/metrics` da API junta Oracle + Redis no formato Prometheus (formato texto gerado à mão, sem dependência nova; `prometheus-client` só com ADR).
+- **Métricas**: cada processo mantém contadores em memória e grava um snapshot a cada 15 s em `ohip:metrics:<processo>:<instancia>` (Redis, TTL 60 s). O consumer também grava o essencial em `OHIP_CONSUMER_STATUS` (estado, ping/pong, RTT, reconexões, fechamentos). O `/metrics` da API junta banco + Redis no formato Prometheus (formato texto gerado à mão, sem dependência nova; `prometheus-client` só com ADR).
 - Métricas: estado da conexão, último offset, eventos/min, duplicados, ignorados, não mapeados, DLQ por estágio, atraso (`received_at − event_ts`, `persisted_at − received_at`), pendentes e idade da mais antiga na outbox, mensagens sem rota, reconexões e códigos de fechamento, RTT do heartbeat, tamanho da fila interna.
 - Alertas (RF-11): sem eventos > X min em horário comercial; conexão caída > Y min (bem antes da retenção de 7 dias); DLQ > Z; outbox mais antiga > W min; 4403/4406/`STOPPED` imediatos; 4409 repetido; Redis fora; lease perdido. Regras no formato Prometheus em `deploy/prometheus/ohip-alerts.yml` (padrão da Q-7; limites a ajustar com a Q-7/Q-8).
 
@@ -317,5 +319,5 @@ entrypoints ──▶ application ──▶ domain
 
 - Segredos (clientId, clientSecret, appKey, senha do banco, tokens de serviço da API) só por ambiente/cofre; `.env.example` sem valores. A app key vai em claro no `connection_init` (DV-7) e é tratada como segredo.
 - Token OAuth no Redis: Redis com senha (ACL) e acesso só pela rede interna (Q-12).
-- `detail` contém dados pessoais: máscara nos logs, na API (inclusive no export) e na fila; bruto íntegro no Oracle com acesso restrito; BI lê por view mascarada (Q-9).
+- `detail` contém dados pessoais: máscara nos logs, na API (inclusive no export) e na fila; bruto íntegro no banco com acesso restrito; BI lê por view mascarada (Q-9).
 - Dados de cartão: nunca assinar eventos de pagamento. Número completo de cartão (13 a 19 dígitos seguidos, ou em grupos 4-4-4-4[-1..3], 4-6-4 ou 4-6-5 com separadores curtos de espaço, quebra de linha, ponto, hífen ou barra, que passam no Luhn, mesmo com CVV ou validade ao lado ou colados; 12 dígitos em elementos de cartão) em qualquer valor do evento (texto, número JSON ou estrutura aninhada), exceto elementos de número estruturado (fidelidade, telefone, documento, confirmação, ids), que ficam intactos no bruto (os pessoais, como fidelidade, telefone e documento, são mascarados pelo nome nas saídas; ADR-0011 §6), é **removido antes de gravar** (payload bruto e DLQ) e gera log de erro + métrica `ohip_card_data_detected_total`. Elementos de cartão (`CREDIT CARD NUMBER`, validade etc.) são sempre mascarados na saída; o valor truncado que o OPERA envia não gera alerta.

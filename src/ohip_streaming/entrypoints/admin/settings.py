@@ -1,5 +1,5 @@
 """Configuração do painel (ADR-0018). O painel não importa ``ohip_streaming.config``
-(import-linter, ADR-0004): nunca recebe credenciais do Oracle, do Redis ou do OHIP.
+(import-linter, ADR-0004): nunca recebe credenciais do banco, do Redis ou do OHIP.
 
 Lê ``ADMIN_*`` e, com classes próprias, ``APP_ENVIRONMENT``/``APP_CODE_VERSION`` e ``LOG_*``
 (as mesmas variáveis dos outros processos).

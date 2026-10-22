@@ -1,4 +1,4 @@
-"""O "banco" em memória: um objeto que implementa todos os ports do Oracle."""
+"""O "banco" em memória: um objeto que implementa todos os ports do banco."""
 
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ class InMemoryDatabase(
     OperationsFake,
     EnrichmentFake,
 ):
-    """Implementa os 7 ports do Oracle: EventStore, OutboxStore, ReplayStore,
+    """Implementa os 7 ports do banco: EventStore, OutboxStore, ReplayStore,
     ConsumerStatusStore, PurgeStore, OperationsStore e EnrichmentStore.
 
     Cada port fica numa classe própria (refatoração 5 do /entender); todas compartilham o
