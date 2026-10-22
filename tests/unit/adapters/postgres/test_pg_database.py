@@ -243,3 +243,17 @@ def test_drop_tolerates_a_lost_connection() -> None:
             raise RuntimeError("pool fechado")
 
     db._drop(BadPool(), Lost())  # só loga
+
+
+async def test_dedicated_session_closes_only_its_own_executor() -> None:
+    own = db.DedicatedSession(FakePool())
+    await own.run(lambda c: c)
+    own.close()
+    with pytest.raises(RuntimeError):  # executor próprio encerrado (refatoração 13)
+        own._executor.submit(lambda: None)
+
+    with ThreadPoolExecutor(1) as shared:
+        borrowed = db.DedicatedSession(FakePool(), executor=shared)
+        await borrowed.run(lambda c: c)
+        borrowed.close()
+        assert shared.submit(lambda: 1).result() == 1  # o de fora continua de quem o criou

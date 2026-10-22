@@ -346,3 +346,13 @@ def test_api_settings_defaults() -> None:
 def test_ohip_routing_settings_need_no_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OHIP_MODULE_CODES", '{" Reservation ": "rsv"}')
     assert config.OhipRoutingSettings().module_codes == {"reservation": "rsv"}
+
+
+def test_consumer_and_api_read_module_codes_the_same_way(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Caracterização (refatoração 13): a routing key do consumer (OhipSettings) e a do
+    reprocessamento da API (OhipRoutingSettings) saem da mesma normalização."""
+    raw = '{" Reservation ": " rsv ", "PROFILE": "crm", "blocks": "blk"}'
+    consumer = ohip(monkeypatch, OHIP_MODULE_CODES=raw).module_codes
+    monkeypatch.setenv("OHIP_MODULE_CODES", raw)
+    api = config.OhipRoutingSettings().module_codes
+    assert consumer == api == {"reservation": "rsv", "profile": "crm", "blocks": "blk"}

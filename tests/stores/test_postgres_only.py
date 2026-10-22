@@ -15,7 +15,12 @@ from typing import Any
 
 import psycopg
 import pytest
-from tests.stores.backends import PostgresBackend, postgres_test_settings
+from tests.stores.backends import (
+    TEST_SESSION_LOCK,
+    PostgresBackend,
+    postgres_test_settings,
+    take_session_lock,
+)
 from tests.stores.test_store_scenarios import CHAIN, batch, event, persist, records, uid
 
 from ohip_streaming.adapters.postgres import database as pg_db
@@ -107,6 +112,24 @@ def test_reads_and_writes_leave_no_open_transaction(pg: PostgresBackend) -> None
                 connection, lambda cursor: cursor.execute("SELECT 1/0"), failure=StoreOperationError
             )
         assert connection.info.transaction_status == psycopg.pq.TransactionStatus.IDLE
+
+
+def test_a_second_test_run_cannot_share_the_database(pg: PostgresBackend) -> None:
+    """Duas execuções simultâneas da suíte apagavam e semeavam as mesmas chains ZZT (FK e
+    unicidade quebrando ao acaso). Enquanto esta roda, outra sessão não obtém a trava."""
+    with pg.pool.connection() as other:
+        (obtained,) = other.execute(
+            "SELECT pg_try_advisory_lock(%(key)s)", {"key": TEST_SESSION_LOCK}
+        ).fetchone() or (None,)
+        if obtained:
+            other.execute("SELECT pg_advisory_unlock(%(key)s)", {"key": TEST_SESSION_LOCK})
+    assert obtained is False
+
+
+def test_a_second_test_run_gives_up_after_waiting(pg: PostgresBackend) -> None:
+    assert _settings is not None
+    with pytest.raises(RuntimeError, match="outra execução dos testes"):
+        take_session_lock(_settings, wait_ms=200).close()
 
 
 # ------------------------------------------------------------------ lote (ADR-0022 §6)

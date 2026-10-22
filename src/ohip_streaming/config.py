@@ -55,6 +55,13 @@ def _split_csv(value: object) -> object:
     return value
 
 
+def normalize_module_codes(value: dict[str, str]) -> dict[str, str]:
+    """``OHIP_MODULE_CODES`` (moduleName → código da routing key), lido igual pelo consumer
+    (``OhipSettings``) e pelo reprocessamento da API (``OhipRoutingSettings``): o moduleName
+    chega com caixas diferentes ("Reservation", "PROFILE")."""
+    return {key.strip().lower(): code.strip() for key, code in value.items()}
+
+
 class Environment(StrEnum):
     DESENVOLVIMENTO = "desenvolvimento"
     HOMOLOGACAO = "homologacao"
@@ -166,8 +173,7 @@ class OhipSettings(BaseSettings):
     @field_validator("module_codes")
     @classmethod
     def _normalize_module_codes(cls, value: dict[str, str]) -> dict[str, str]:
-        # moduleName chega com caixas diferentes ("Reservation", "PROFILE").
-        return {key.strip().lower(): code.strip() for key, code in value.items()}
+        return normalize_module_codes(value)
 
     @field_validator("event_timezone")
     @classmethod
@@ -205,7 +211,7 @@ class OhipRoutingSettings(BaseSettings):
     @field_validator("module_codes")
     @classmethod
     def _normalize_module_codes(cls, value: dict[str, str]) -> dict[str, str]:
-        return {key.strip().lower(): code.strip() for key, code in value.items()}
+        return normalize_module_codes(value)
 
 
 SslMode = Literal["disable", "allow", "prefer", "require", "verify-ca", "verify-full"]

@@ -67,8 +67,6 @@ log = get_logger(__name__)
 
 RESERVE_IDS_SQL = "SELECT nextval('ohip_event_raw_seq') FROM generate_series(1, %(count)s)"
 
-UQ_EVT = "ohip_event_raw_uq_evt"
-
 INSERT_RAW_SQL = """
 INSERT INTO ohip_event_raw (
     id, chain_code, hotel_id, offset_value, unique_event_id, subscription_id, module_name,

@@ -152,6 +152,7 @@ Grupo `POSTGRES_` no lugar de `ORACLE_`:
 - **Mesmos cenários de contrato** de `tests/stores/`, rodando no fake em memória e num PostgreSQL de teste. O marcador `oracle` vira `postgres`.
 - PostgreSQL de teste só com `TEST_POSTGRES_DSN` **e** `TEST_POSTGRES_DISPOSABLE=sim`:
   - os testes só fazem DML nas chains `ZZT*`, com as mesmas guardas de hoje;
+  - uma execução da suíte por vez em cada banco: a primeira abertura do processo segura um advisory lock de sessão (`pg_advisory_lock`, conexão própria) até o processo sair; outra execução espera até 15 min e depois desiste. Sem isso, duas execuções simultâneas (dois terminais, um subagente revisando) apagavam e semeavam as mesmas chains `ZZT` no meio dos testes uma da outra (`23503`/`23505` ao acaso, achado na refatoração 13);
   - os testes de plano (`EXPLAIN`) semeiam linhas `ZZT` (DML) e rodam `ANALYZE` das três tabelas antes, para o planejador decidir com estatísticas; `ANALYZE` é manutenção, não DDL, e num banco onde o papel não é dono vira só um aviso;
   - o schema vem dos scripts de `sql/postgres/`, aplicados pelo alvo `make test-db`. Ele **sobe o próprio contêiner** (`docker run --rm`, nome aleatório, porta só em `127.0.0.1`, senha gerada na hora) e aplica a DDL **somente no DSN que ele mesmo criou**. Nunca aceita um DSN informado, porque `localhost` também pode ser túnel SSH, `port-forward` ou um PostgreSQL de verdade na mesma VM;
   - antes da DDL, o alvo confere que o banco está vazio (nenhuma relação no schema alvo) e aplica com `ON_ERROR_STOP=1 --single-transaction`;

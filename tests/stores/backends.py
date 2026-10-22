@@ -11,16 +11,21 @@ PostgreSQL de teste — travas de segurança (CLAUDE.md: DDL nunca em banco exis
   de novo antes de cada teste;
 - antes de qualquer DML, recusa o banco se houver chain que não seja ``ZZT...`` em
   OHIP_OFFSET/OHIP_OUTBOX ou lease ``publisher`` ativo com outro dono (proteção contra apontar
-  por engano para homologação).
+  por engano para homologação);
+- uma execução da suíte por vez em cada banco: a primeira abertura do processo segura um
+  advisory lock de sessão até o processo sair, e outra execução (outro terminal, um subagente)
+  espera aqui em vez de apagar as chains ZZT no meio dos testes desta.
 """
 
 from __future__ import annotations
 
+import atexit
 import os
 from dataclasses import dataclass, replace
 from datetime import timedelta
 from typing import Any
 
+import psycopg
 from pydantic import SecretStr
 from tests.fakes.memory import (
     EXCHANGES,
@@ -56,6 +61,9 @@ from ohip_streaming.domain.leases import consumer_lease
 from ohip_streaming.domain.offset import Offset
 
 TEST_CHAINS = ("ZZT1", "ZZT2")
+# Advisory lock de sessão que serializa as execuções da suíte num mesmo banco de teste.
+TEST_SESSION_LOCK = 0x0F1E_7E57
+SESSION_LOCK_WAIT_MS = 15 * 60 * 1000  # uma execução completa leva menos de 1 min
 
 
 @dataclass(frozen=True)
@@ -248,6 +256,39 @@ UPDATE ohip_lease
  WHERE lease_name = %(lease)s"""
 
 
+_session_lock: list[psycopg.Connection[Any]] = []  # a conexão que segura TEST_SESSION_LOCK
+
+
+def hold_session_lock(settings: PostgresSettings) -> None:
+    """Segura a trava até este processo sair (na primeira abertura do processo)."""
+    if not _session_lock:
+        connection = take_session_lock(settings, wait_ms=SESSION_LOCK_WAIT_MS)
+        _session_lock.append(connection)
+        atexit.register(connection.close)
+
+
+def take_session_lock(settings: PostgresSettings, *, wait_ms: int) -> psycopg.Connection[Any]:
+    """Espera outra execução da suíte terminar e devolve a conexão que segura a trava.
+
+    A trava é da conexão, não do pool: o servidor a libera sozinho se o processo morrer."""
+    connection = psycopg.connect(
+        **pg.connection_kwargs(
+            settings,
+            environment=Environment.DESENVOLVIMENTO,
+            application_name="ohip-test-lock",
+            statement_timeout_ms=wait_ms,
+        )
+    )
+    try:
+        connection.execute("SELECT pg_advisory_lock(%(key)s)", {"key": TEST_SESSION_LOCK})
+    except psycopg.errors.QueryCanceled as exc:
+        connection.close()
+        raise RuntimeError(
+            f"outra execução dos testes segura o banco de teste há mais de {wait_ms} ms: recusado"
+        ) from exc
+    return connection
+
+
 def postgres_test_settings() -> PostgresSettings | None:
     dsn = os.environ.get("TEST_POSTGRES_DSN")
     if not dsn or os.environ.get("TEST_POSTGRES_DISPOSABLE") != "sim":
@@ -288,6 +329,7 @@ class PostgresBackend(Backend):
 
     @classmethod
     def open(cls, settings: PostgresSettings) -> PostgresBackend:
+        hold_session_lock(settings)
         return cls(
             pg.open_pool(
                 settings, environment=Environment.DESENVOLVIMENTO, application_name="ohip-test"

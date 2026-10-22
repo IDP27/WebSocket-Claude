@@ -41,7 +41,7 @@ Uma por vez, cada uma com testes de caracterização escritos antes, revisão e 
 | 10 | Nome do lease numa fonte só (`domain/leases.py`: barreira dos adapters = `LeaseKeeper` e alertas dos entrypoints; `replay_store` não importa mais o `event_store`) | ✅ aprovada (achados: `LeaseKeeper.name`, teste de contrato seeds × domínio) |
 | 11 | Lista de máscara LGPD configurável (`MASK_EXTRA_ELEMENTS`, `entrypoints/common.masking_policy`: fila do consumer, consultas/export da API e reprocessamento) | em revisão |
 | 12 | Stores sem wrappers duplicados (`database.read`/`database.write` em todos os stores; −54 linhas) | em revisão |
-| 13 | Limpezas: validador `module_codes` único, `UQ_EVT` morta, `shutdown()` dos executores, docs (`MERGE`/ORA) | proposto |
+| 13 | Limpezas: `normalize_module_codes` único (consumer e API), `UQ_EVT` morta removida, `DedicatedSession` encerra o próprio executor (o `shutdown()` do publisher/enricher já existia), docs (`MERGE` → `ON CONFLICT`, ORA → SQLSTATE). Depuração no caminho: `make test-postgres` falhava ao acaso porque duas execuções simultâneas no mesmo banco se atropelavam; a suíte agora segura um advisory lock de sessão | em revisão |
 | 14 | *(opcional)* Extrair a política de reconexão do `ChainConsumer` | proposto |
 
 ## Preparação para as pendências externas (sem a Q-1)

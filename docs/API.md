@@ -33,7 +33,7 @@
 | GET | `/api/v1/events` | read | Filtros: `chain_code`, `hotel_id`, `event_name`, `module_name`, `primary_key`, `from`, `to`, `processing_status`. |
 | GET | `/api/v1/events/{unique_event_id}` | read | Evento bruto + status de processamento + linha da outbox + itens de DLQ ligados. |
 | GET | `/api/v1/events/{unique_event_id}/export` | admin | **Adição ao PRD (RF-13):** JSON com payload (mascarado por padrão) e contexto para reprodução local. |
-| POST | `/api/v1/events/{unique_event_id}/reprocess` | admin | Insere na outbox uma mensagem para o exchange `ohip.reprocess` (só o enricher recebe). O enricher não deduplica reprocessamentos e o `MERGE` usa `<=`, então reaplica a regra (idempotente). 202 Accepted. |
+| POST | `/api/v1/events/{unique_event_id}/reprocess` | admin | Insere na outbox uma mensagem para o exchange `ohip.reprocess` (só o enricher recebe). O enricher não deduplica reprocessamentos e o `INSERT ... ON CONFLICT` usa `<=`, então reaplica a regra (idempotente). 202 Accepted. |
 | POST | `/api/v1/replay` | admin | Pede replay de uma chain a partir de um offset. 202 Accepted. |
 | GET | `/api/v1/replay` | read | **Adição ao PRD:** lista pedidos de replay e seu status (o painel precisa acompanhar o pedido). |
 | DELETE | `/api/v1/replay/{id}` | admin | **Adição ao PRD:** cancela um pedido ainda `PENDING` (`CANCELLED`). Responde 200 com o pedido atualizado. |

@@ -251,6 +251,7 @@ class DedicatedSession:
 
     def __init__(self, pool: Pool, *, executor: Executor | None = None) -> None:
         self._pool = pool
+        self._owns_executor = executor is None  # o próprio, encerrado no close()
         self._executor = executor or ThreadPoolExecutor(1, thread_name_prefix="postgres-escrita")
         self._connection: Any = None
 
@@ -279,6 +280,8 @@ class DedicatedSession:
         if self._connection is not None:
             connection, self._connection = self._connection, None
             self._pool.putconn(connection)
+        if self._owns_executor:
+            self._executor.shutdown(wait=False)
 
 
 class PooledSession:
