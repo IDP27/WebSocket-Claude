@@ -116,6 +116,14 @@ SCENARIOS: dict[str, list[tuple[SessionEnd, tuple[str, float, str | None, str, i
             ("STOP", 0, "CRITICAL", "mensagem acima do limite 3x no mesmo offset", 1),
         ),
     ],
+    "mensagem_grande_antes_de_assinar": [  # sem offset (None) também conta como o mesmo
+        (end(R.OVERSIZE), ("RECONNECT", 10.0, None, BIG, 0)),
+        (end(R.OVERSIZE), ("RECONNECT", 10.0, None, BIG, 0)),
+        (
+            end(R.OVERSIZE),
+            ("STOP", 0, "CRITICAL", "mensagem acima do limite 3x no mesmo offset", 0),
+        ),
+    ],
     "drenagem": [  # token e replay: espera mínima, sem contar falha
         (end(R.SERVER_CLOSED), ("RECONNECT", 10.0, None, REDE, 1)),
         (end(R.DRAINED, 1000, cause=D.TOKEN), ("RECONNECT", 10.0, None, "TOKEN", 1)),
@@ -141,3 +149,18 @@ def test_reconnect_decisions(name: str) -> None:
         alert = d.alert.name if d.alert else None
         seen.append((d.action.name, round(d.wait_s, 3), alert, d.reason, decider.failures))
     assert seen == [expected for _, expected in SCENARIOS[name]]
+
+
+def test_healthy_session_resets_failures_even_without_a_decision() -> None:
+    """Parada ou lease perdido depois de uma sessão saudável: ``_after_session`` só chama
+    ``settle`` e grava (ou não) ``consecutive_failures`` = 0."""
+    decider = ReconnectDecider(
+        ConsumerOptions("C", "i", UTC).policy, lambda: 0.0, auth_rejected_max=5
+    )
+    for _ in range(3):
+        decider.decide(end(R.SERVER_CLOSED))
+    assert decider.failures == 3
+    decider.settle(end(R.SERVER_CLOSED))  # não saudável: nada muda
+    assert decider.failures == 3
+    decider.settle(end(R.DRAINED, 1000, healthy=True))
+    assert decider.failures == 0
