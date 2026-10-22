@@ -1,26 +1,24 @@
 """Caracterização da decisão de reconexão do consumer (refatoração 14 do /entender).
 
-Escrito **antes** de extrair a decisão do ``ChainConsumer`` (RNF-15): cada cenário é uma
-sequência de fins de sessão e fixa, para cada um, ação, espera, alerta, motivo e falhas
-seguidas. O jitter vem de uma sequência fixa de sorteios.
+Escrito **antes** de extrair a decisão do ``ChainConsumer`` para ``ReconnectDecider``
+(RNF-15), contra o código antigo; depois da extração, só a construção do decisor mudou.
+Cada cenário é uma sequência de fins de sessão e fixa, para cada um, ação, espera, alerta,
+motivo e falhas seguidas. O jitter vem de uma sequência fixa de sorteios.
 """
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-from typing import Any, cast
-from zoneinfo import ZoneInfo
+from datetime import UTC
 
 import pytest
 
-from ohip_streaming.application.use_cases.consume_chain import (
-    ChainConsumer,
-    ConsumerDeps,
-    ConsumerOptions,
+from ohip_streaming.application.use_cases.consume_chain import ConsumerOptions
+from ohip_streaming.application.use_cases.consumer_session import DrainCause
+from ohip_streaming.application.use_cases.reconnect import (
     EndReason,
+    ReconnectDecider,
     SessionEnd,
 )
-from ohip_streaming.application.use_cases.consumer_session import DrainCause
 from ohip_streaming.domain.offset import Offset
 
 R, D = EndReason, DrainCause
@@ -36,25 +34,6 @@ def end(
     offset: str | None = None,
 ) -> SessionEnd:
     return SessionEnd(reason, code, "x", healthy, cause, Offset(offset) if offset else None)
-
-
-class _Decider:
-    """Adaptador sobre o ``ChainConsumer`` atual (o mesmo que ``_after_session`` faz)."""
-
-    def __init__(self, rng: Any) -> None:
-        deps = cast(ConsumerDeps, SimpleNamespace(rng=rng))
-        self._consumer = ChainConsumer(deps, ConsumerOptions("C", "i", ZoneInfo("UTC")))
-
-    def settle(self, end: SessionEnd) -> None:
-        if end.healthy:
-            self._consumer._failures = 0
-
-    def decide(self, end: SessionEnd) -> Any:
-        return self._consumer._decide(end)
-
-    @property
-    def failures(self) -> int:
-        return self._consumer._failures
 
 
 NOT, REDE = "4401: token ou hash da app key inválido", "queda de rede ou timeout"
@@ -151,7 +130,10 @@ SCENARIOS: dict[str, list[tuple[SessionEnd, tuple[str, float, str | None, str, i
 @pytest.mark.parametrize("name", list(SCENARIOS))
 def test_reconnect_decisions(name: str) -> None:
     rolls = iter(ROLLS * 10)
-    decider = _Decider(lambda: next(rolls))
+    defaults = ConsumerOptions("C", "i", UTC)  # política e limite padrão do consumer
+    decider = ReconnectDecider(
+        defaults.policy, lambda: next(rolls), auth_rejected_max=defaults.auth_rejected_max
+    )
     seen = []
     for session_end, _ in SCENARIOS[name]:
         decider.settle(session_end)

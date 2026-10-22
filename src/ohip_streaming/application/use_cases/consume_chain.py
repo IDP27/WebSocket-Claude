@@ -1,7 +1,8 @@
 """Consumer de uma chain: ciclo de vida da conexão OHIP (ADR-0007, ARCHITECTURE §3.1 e §4).
 
 ``ChainConsumer.run`` é o laço externo: lease → regra dos 10 s → [replay pendente →
-sessão → decisão de fechamento → espera] até parar. ``_Session`` é uma conexão:
+sessão → decisão de fechamento (``reconnect.ReconnectDecider``) → espera] até parar.
+``_Session`` é uma conexão:
 
 - ``connection_init`` logo após abrir; ``connection_ack`` com prazo;
 - status opcional (D-4) num ``subscribe`` próprio;
@@ -26,7 +27,6 @@ import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import tzinfo
-from enum import StrEnum
 from typing import Any
 
 from ohip_streaming.application.errors import (
@@ -63,18 +63,18 @@ from ohip_streaming.application.use_cases.process_event_batch import (
     ProcessEventBatch,
     RetryConsumeDlq,
 )
+from ohip_streaming.application.use_cases.reconnect import (
+    EndReason,
+    ReconnectDecider,
+    SessionEnd,
+)
 from ohip_streaming.application.use_cases.replay import ApplyReplay
 from ohip_streaming.application.use_cases.token_provider import TokenProvider
 from ohip_streaming.domain import protocol
 from ohip_streaming.domain.connection import (
-    SINGLE_CONSUMER_LOCK,
-    AlertLevel,
     CloseAction,
-    CloseDecision,
     ConsumerState,
     ReconnectPolicy,
-    decide_on_close,
-    decide_on_oversize,
     wait_before_connect,
 )
 from ohip_streaming.domain.offset import Offset
@@ -113,29 +113,6 @@ class ConsumerOptions:
     policy: ReconnectPolicy = field(default_factory=ReconnectPolicy)
 
 
-class EndReason(StrEnum):
-    SERVER_CLOSED = "SERVER_CLOSED"  # fechou sem a gente pedir (código em close_code)
-    DRAINED = "DRAINED"  # complete enviado e o servidor fechou (ou o prazo venceu)
-    LIVENESS_TIMEOUT = "LIVENESS_TIMEOUT"  # sem pong nem next além do prazo
-    ACK_TIMEOUT = "ACK_TIMEOUT"
-    OVERSIZE = "OVERSIZE"
-    HANDSHAKE_REJECTED = "HANDSHAKE_REJECTED"  # HTTP 400 no upgrade: chave/URL (config)
-    CONNECTION_ACTIVE = "CONNECTION_ACTIVE"  # status check: há outra conexão
-    AUTH_REJECTED = "AUTH_REJECTED"  # OAuth recusou as credenciais
-    UNAVAILABLE = "UNAVAILABLE"  # OAuth ou banco fora antes de assinar
-    INTERNAL_ERROR = "INTERNAL_ERROR"  # tarefa da sessão falhou com erro inesperado
-
-
-@dataclass(slots=True)
-class SessionEnd:
-    reason: EndReason
-    close_code: int | None = None
-    detail: str = ""
-    healthy: bool = False  # recebeu evento ou ficou assinada o bastante (zera as falhas)
-    drain_cause: DrainCause | None = None
-    offset: Offset | None = None  # offset confirmado ao assinar
-
-
 @dataclass
 class ConsumerDeps:
     connector: WsConnector
@@ -157,9 +134,9 @@ class ChainConsumer:
         self._deps = deps
         self._options = options
         self._stop = asyncio.Event()
-        self._failures = 0
-        self._auth_rejections = 0
-        self._oversize: tuple[Offset | None, int] = (None, 0)
+        self._reconnect = ReconnectDecider(
+            options.policy, deps.rng, auth_rejected_max=options.auth_rejected_max
+        )
 
     def request_stop(self) -> None:
         """SIGTERM: drena, grava a desconexão, libera o lease e sai."""
@@ -220,8 +197,7 @@ class ChainConsumer:
     async def _after_session(self, end: SessionEnd) -> bool:
         """Grava a desconexão e espera. True = encerrar o laço."""
         d, o = self._deps, self._options
-        if end.healthy:
-            self._failures = 0
+        self._reconnect.settle(end)
         if d.lease.lost or end.drain_cause is DrainCause.LEASE_LOST:
             # A linha da chain é da nova dona: gravar aqui sobrescreveria o estado dela
             # (a regra dos 10 s dela usa o last_disconnect_at que ela mesma grava).
@@ -231,7 +207,7 @@ class ChainConsumer:
             await self._disconnected(ConsumerState.WAITING, end)
             return True
 
-        decision = self._decide(end)
+        decision = self._reconnect.decide(end)
         if decision.alert is not None:
             log.error("consumer_alerta", level=decision.alert.value, reason=decision.reason)
         if decision.action is CloseAction.STOP:
@@ -251,47 +227,6 @@ class ChainConsumer:
         await self._sleep(decision.wait_s)
         return self._stop.is_set()
 
-    def _decide(self, end: SessionEnd) -> CloseDecision:
-        policy, rng = self._options.policy, self._deps.rng
-        if end.reason is EndReason.OVERSIZE:
-            offset, repeats = self._oversize
-            repeats = repeats + 1 if offset == end.offset else 1
-            self._oversize = (end.offset, repeats)
-            return decide_on_oversize(repeats, policy)
-        self._oversize = (None, 0)
-        if end.reason is EndReason.DRAINED and end.drain_cause in (
-            DrainCause.TOKEN,
-            DrainCause.REPLAY,
-        ):
-            return CloseDecision(CloseAction.RECONNECT, policy.min_gap_s, str(end.drain_cause))
-        if end.reason is EndReason.CONNECTION_ACTIVE:
-            self._failures += 1
-            return decide_on_close(SINGLE_CONSUMER_LOCK, self._failures, policy, rng)
-        if not end.healthy:
-            self._failures += 1
-        failures = max(1, self._failures)
-        if end.reason is EndReason.AUTH_REJECTED:
-            self._auth_rejections += 1
-            if self._auth_rejections >= self._options.auth_rejected_max:
-                return CloseDecision(
-                    CloseAction.STOP,
-                    0,
-                    f"OAuth recusou {self._auth_rejections}x seguidas: {end.detail}",
-                    AlertLevel.CRITICAL,
-                )
-        else:
-            self._auth_rejections = 0
-        if end.reason in (
-            EndReason.HANDSHAKE_REJECTED,
-            EndReason.AUTH_REJECTED,
-            EndReason.UNAVAILABLE,
-        ):
-            decision = decide_on_close(None, failures, policy, rng)
-            critical = end.reason is not EndReason.UNAVAILABLE  # configuração: alerta já
-            alert = AlertLevel.CRITICAL if critical else decision.alert
-            return CloseDecision(decision.action, decision.wait_s, end.detail, alert)
-        return decide_on_close(end.close_code, failures, policy, rng)
-
     async def _disconnected(
         self,
         state: ConsumerState,
@@ -309,7 +244,7 @@ class ChainConsumer:
                 state,
                 end.close_code,
                 reason,
-                consecutive_failures=self._failures,
+                consecutive_failures=self._reconnect.failures,
                 reconnect=reconnect,
                 next_attempt_in_s=next_attempt_in_s,
             )
