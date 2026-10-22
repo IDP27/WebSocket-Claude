@@ -11,7 +11,7 @@ from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 
-from ohip_streaming.adapters.postgres.database import Cursor, Session, query, transaction
+from ohip_streaming.adapters.postgres.database import Cursor, Session, read, write
 from ohip_streaming.adapters.postgres.rows import (
     CLOSE_REASON_BYTES,
     from_db,
@@ -19,7 +19,7 @@ from ohip_streaming.adapters.postgres.rows import (
     to_db,
     truncate_bytes,
 )
-from ohip_streaming.application.errors import StoreOperationError, UnknownChainError
+from ohip_streaming.application.errors import UnknownChainError
 from ohip_streaming.application.ports import ConnectionHealth, DisconnectSnapshot
 from ohip_streaming.domain.connection import ConsumerState
 
@@ -132,11 +132,7 @@ class PostgresConsumerStatusStore:
         await self._update(chain_code, lambda cursor: cursor.execute(statement, params))
 
     async def disconnect_snapshot(self, chain_code: str) -> DisconnectSnapshot:
-        rows = await self._session.run(
-            lambda connection: query(
-                connection, SNAPSHOT_SQL, {"chain_code": chain_code}, failure=StoreOperationError
-            )
-        )
+        rows = await read(self._session, SNAPSHOT_SQL, {"chain_code": chain_code})
         if not rows:
             raise UnknownChainError(chain_code)
         db_now, last_disconnect_at, state = rows[0]
@@ -152,9 +148,7 @@ class PostgresConsumerStatusStore:
             if cursor.rowcount != 1:
                 raise UnknownChainError(chain_code)
 
-        await self._session.run(
-            lambda connection: transaction(connection, body, failure=StoreOperationError)
-        )
+        await write(self._session, body)
 
 
 def health_sql(chain_code: str, health: ConnectionHealth) -> tuple[str | None, dict[str, Any]]:

@@ -27,6 +27,7 @@ from ohip_streaming.adapters.postgres.errors import translate
 from ohip_streaming.application.errors import (
     ApplicationError,
     LeaseLostError,
+    StoreOperationError,
     StoreUnavailableError,
 )
 from ohip_streaming.logging import get_logger, run_in_executor
@@ -220,6 +221,29 @@ def query(
 
 class Session(Protocol):
     async def run(self, work: Callable[[Any], T]) -> T: ...
+
+
+async def read(
+    session: Session,
+    statement: str,
+    parameters: dict[str, Any],
+    *,
+    failure: type[ApplicationError] = StoreOperationError,
+) -> list[Sequence[Any]]:
+    """Leitura fora de transação pela sessão (refatoração 12: um apoio para todos os stores)."""
+    return await session.run(
+        lambda connection: query(connection, statement, parameters, failure=failure)
+    )
+
+
+async def write(
+    session: Session,
+    body: Callable[[Cursor], T],
+    *,
+    failure: type[ApplicationError] = StoreOperationError,
+) -> T:
+    """Escrita numa transação pela sessão: ``body`` roda com o cursor e o commit vem no fim."""
+    return await session.run(lambda connection: transaction(connection, body, failure=failure))
 
 
 class DedicatedSession:

@@ -9,10 +9,9 @@ A API não é dona de lease: o que ela insere na outbox é lido pelo publisher, 
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
-from typing import Any, TypeVar
+from typing import TypeVar
 
-from ohip_streaming.adapters.postgres.database import Cursor, Session, query, transaction
+from ohip_streaming.adapters.postgres.database import Cursor, Session, read, write
 from ohip_streaming.adapters.postgres.rows import stored_event_from_row
 from ohip_streaming.application.errors import StoreOperationError
 from ohip_streaming.application.ports import DlqItem, DlqStage, StoredEvent
@@ -82,24 +81,25 @@ class PostgresOperationsStore:
         self._session = session
 
     async def find_event(self, unique_event_id: str) -> StoredEvent | None:
-        rows = await self._query(EVENT_BY_UID_SQL, {"uid": unique_event_id})
+        rows = await read(self._session, EVENT_BY_UID_SQL, {"uid": unique_event_id})
         return stored_event_from_row(rows[0]) if rows else None
 
     async def get_event(self, raw_event_id: int) -> StoredEvent | None:
-        rows = await self._query(EVENT_BY_ID_SQL, {"id": raw_event_id})
+        rows = await read(self._session, EVENT_BY_ID_SQL, {"id": raw_event_id})
         return stored_event_from_row(rows[0]) if rows else None
 
     async def enqueue(
         self, *, chain_code: str, raw_event_id: int, message: QueueMessage, exchange_name: str
     ) -> int:
-        return await self._write(
+        return await write(
+            self._session,
             lambda cursor: self._insert_message(
                 cursor, chain_code, raw_event_id, message, exchange_name
-            )
+            ),
         )
 
     async def get_dlq_item(self, item_id: int) -> DlqItem | None:
-        rows = await self._query(DLQ_ITEM_SQL, {"id": item_id})
+        rows = await read(self._session, DLQ_ITEM_SQL, {"id": item_id})
         if not rows:
             return None
         item_id_, stage, chain_code, raw_id, outbox_id, uid, resolution = rows[0]
@@ -118,7 +118,7 @@ class PostgresOperationsStore:
             cursor.execute(REQUEST_CONSUME_RETRY_SQL, {"id": item_id, "requested_by": requested_by})
             return cursor.rowcount == 1
 
-        return await self._write(body)
+        return await write(self._session, body)
 
     async def retry_publish(self, item_id: int, outbox_id: int, requested_by: str) -> int | None:
         def body(cursor: Cursor) -> int | None:
@@ -130,7 +130,7 @@ class PostgresOperationsStore:
                 raise StoreOperationError(f"linha {outbox_id} da outbox não existe")
             return int(row[0])
 
-        return await self._write(body)
+        return await write(self._session, body)
 
     async def enqueue_and_resolve(
         self,
@@ -147,7 +147,7 @@ class PostgresOperationsStore:
                 return None
             return self._insert_message(cursor, chain_code, raw_event_id, message, exchange_name)
 
-        return await self._write(body)
+        return await write(self._session, body)
 
     # ------------------------------------------------------------------- apoio
 
@@ -175,13 +175,3 @@ class PostgresOperationsStore:
         )
         (value,) = cursor.fetchone()
         return int(value)
-
-    async def _query(self, statement: str, parameters: dict[str, Any]) -> list[Sequence[Any]]:
-        return await self._session.run(
-            lambda connection: query(connection, statement, parameters, failure=StoreOperationError)
-        )
-
-    async def _write(self, body: Callable[[Cursor], T]) -> T:
-        return await self._session.run(
-            lambda connection: transaction(connection, body, failure=StoreOperationError)
-        )

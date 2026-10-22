@@ -7,11 +7,10 @@ uma transação curta na conexão de controle, separada da conexão de escrita.
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from typing import TypeVar
 
-from ohip_streaming.adapters.postgres.database import Cursor, Session, transaction
-from ohip_streaming.application.errors import LeaseNotProvisionedError, StoreOperationError
+from ohip_streaming.adapters.postgres.database import Cursor, Session, write
+from ohip_streaming.application.errors import LeaseNotProvisionedError
 
 T = TypeVar("T")
 
@@ -60,7 +59,7 @@ class PostgresLeaseStore:
                 raise LeaseNotProvisionedError(f"lease {lease_name} não existe em OHIP_LEASE")
             return None  # outro dono com prazo válido
 
-        return await self._run(body)
+        return await write(self._session, body)
 
     async def renew(self, lease_name: str, owner: str, epoch: int, ttl_s: float) -> bool:
         def body(cursor: Cursor) -> bool:
@@ -70,15 +69,10 @@ class PostgresLeaseStore:
             )
             return cursor.rowcount == 1
 
-        return await self._run(body)
+        return await write(self._session, body)
 
     async def release(self, lease_name: str, owner: str, epoch: int) -> None:
         def body(cursor: Cursor) -> None:
             cursor.execute(RELEASE_SQL, {"lease_name": lease_name, "owner": owner, "epoch": epoch})
 
-        await self._run(body)
-
-    async def _run(self, body: Callable[[Cursor], T]) -> T:
-        return await self._session.run(
-            lambda connection: transaction(connection, body, failure=StoreOperationError)
-        )
+        await write(self._session, body)

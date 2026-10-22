@@ -13,7 +13,7 @@ from collections.abc import Callable, Sequence
 from datetime import datetime
 from typing import Any, TypeVar
 
-from ohip_streaming.adapters.postgres.database import Session, query
+from ohip_streaming.adapters.postgres.database import Session, query, read
 from ohip_streaming.adapters.postgres.outbox_chains import OUTBOX_CHAINS_CTE
 from ohip_streaming.adapters.postgres.rows import (
     from_db,
@@ -348,7 +348,7 @@ class PostgresMonitoringStore:
         self._session = session
 
     async def ping(self) -> None:
-        await self._query(PING_SQL, {})
+        await read(self._session, PING_SQL, {})
 
     async def status(self) -> StatusSnapshot:
         def work(connection: Any) -> StatusSnapshot:
@@ -363,7 +363,9 @@ class PostgresMonitoringStore:
 
     async def events(self, query_: EventFilter, page: PageRequest) -> Page[EventSummary]:
         conditions, params = event_conditions(query_, page)
-        rows = await self._query(page_sql(EVENT_COLUMNS, "ohip_event_raw", conditions), params)
+        rows = await read(
+            self._session, page_sql(EVENT_COLUMNS, "ohip_event_raw", conditions), params
+        )
         return _page([event_summary(r) for r in rows], page, lambda e: e.raw_event_id)
 
     async def event(self, unique_event_id: str) -> EventRecord | None:
@@ -388,12 +390,14 @@ class PostgresMonitoringStore:
 
     async def outbox(self, query_: OutboxQuery, page: PageRequest) -> Page[OutboxEntry]:
         conditions, params = outbox_conditions(query_, page)
-        rows = await self._query(page_sql(OUTBOX_COLUMNS, "ohip_outbox", conditions), params)
+        rows = await read(
+            self._session, page_sql(OUTBOX_COLUMNS, "ohip_outbox", conditions), params
+        )
         return _page([outbox_entry(r) for r in rows], page, lambda e: e.id)
 
     async def oldest_pending_age_s(self, chain_code: str | None) -> float | None:
         params = {"chain_code": chain_code} if chain_code else {}
-        rows = await self._query(oldest_pending_sql(chain_code), params)
+        rows = await read(self._session, oldest_pending_sql(chain_code), params)
         if not rows or rows[0][0] is None:
             return None
         oldest, db_now = rows[0]
@@ -401,18 +405,18 @@ class PostgresMonitoringStore:
 
     async def dlq(self, query_: DlqQuery, page: PageRequest) -> Page[DlqEntry]:
         conditions, params = dlq_conditions(query_, page)
-        rows = await self._query(page_sql(DLQ_COLUMNS, "ohip_dlq", conditions), params)
+        rows = await read(self._session, page_sql(DLQ_COLUMNS, "ohip_dlq", conditions), params)
         return _page([dlq_entry(r) for r in rows], page, lambda e: e.id)
 
     async def replays(self, query_: ReplayQuery, page: PageRequest) -> Page[ReplayEntry]:
         conditions, params = replay_conditions(query_, page)
-        rows = await self._query(
-            page_sql(REPLAY_COLUMNS, "ohip_replay_request", conditions), params
+        rows = await read(
+            self._session, page_sql(REPLAY_COLUMNS, "ohip_replay_request", conditions), params
         )
         return _page([replay_entry(r) for r in rows], page, lambda e: e.id)
 
     async def replay(self, request_id: int) -> ReplayEntry | None:
-        rows = await self._query(REPLAY_BY_ID_SQL, {"id": request_id})
+        rows = await read(self._session, REPLAY_BY_ID_SQL, {"id": request_id})
         return replay_entry(rows[0]) if rows else None
 
     # ------------------------------------------------------------------- apoio
@@ -420,9 +424,6 @@ class PostgresMonitoringStore:
     @staticmethod
     def _run(connection: Any, statement: str, params: dict[str, Any]) -> list[Sequence[Any]]:
         return query(connection, statement, params, failure=StoreOperationError)
-
-    async def _query(self, statement: str, params: dict[str, Any]) -> list[Sequence[Any]]:
-        return await self._session.run(lambda c: self._run(c, statement, params))
 
 
 def _snapshot(

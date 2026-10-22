@@ -7,10 +7,9 @@ remarcada.
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from datetime import datetime
 
-from ohip_streaming.adapters.postgres.database import Cursor, Session, fence, query, transaction
+from ohip_streaming.adapters.postgres.database import Cursor, Session, fence, read, write
 from ohip_streaming.adapters.postgres.outbox_chains import OUTBOX_CHAINS_CTE
 from ohip_streaming.adapters.postgres.rows import (
     ERROR_MESSAGE_BYTES,
@@ -18,7 +17,6 @@ from ohip_streaming.adapters.postgres.rows import (
     to_db,
     truncate_bytes,
 )
-from ohip_streaming.application.errors import StoreOperationError
 from ohip_streaming.application.ports import OutboxRow
 from ohip_streaming.domain.leases import PUBLISHER_LEASE
 from ohip_streaming.logging import get_logger
@@ -85,22 +83,11 @@ class PostgresOutboxStore:
         self._code_version = code_version
 
     async def chains_with_pending(self) -> list[str]:
-        rows = await self._session.run(
-            lambda connection: query(
-                connection, CHAINS_WITH_PENDING_SQL, {}, failure=StoreOperationError
-            )
-        )
+        rows = await read(self._session, CHAINS_WITH_PENDING_SQL, {})
         return [str(row[0]) for row in rows]
 
     async def fetch_head(self, chain_code: str, limit: int) -> list[OutboxRow]:
-        rows = await self._session.run(
-            lambda connection: query(
-                connection,
-                FETCH_HEAD_SQL,
-                {"chain_code": chain_code, "limit": limit},
-                failure=StoreOperationError,
-            )
-        )
+        rows = await read(self._session, FETCH_HEAD_SQL, {"chain_code": chain_code, "limit": limit})
         return [
             OutboxRow(
                 id=int(row_id),
@@ -132,7 +119,7 @@ class PostgresOutboxStore:
             self._check_pending(cursor, row_id)
             fence(cursor, PUBLISHER_LEASE, lease_epoch)
 
-        await self._write(body)
+        await write(self._session, body)
 
     async def record_failure(
         self, row_id: int, attempts: int, next_attempt_at: datetime, error: str, lease_epoch: int
@@ -150,7 +137,7 @@ class PostgresOutboxStore:
             self._check_pending(cursor, row_id)
             fence(cursor, PUBLISHER_LEASE, lease_epoch)
 
-        await self._write(body)
+        await write(self._session, body)
 
     async def mark_failed(self, row_id: int, attempts: int, error: str, lease_epoch: int) -> None:
         message = truncate_bytes(error, ERROR_MESSAGE_BYTES)
@@ -171,12 +158,7 @@ class PostgresOutboxStore:
                 )
             fence(cursor, PUBLISHER_LEASE, lease_epoch)
 
-        await self._write(body)
-
-    async def _write(self, body: Callable[[Cursor], None]) -> None:
-        await self._session.run(
-            lambda connection: transaction(connection, body, failure=StoreOperationError)
-        )
+        await write(self._session, body)
 
     @staticmethod
     def _check_pending(cursor: Cursor, row_id: int) -> bool:

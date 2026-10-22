@@ -12,8 +12,7 @@ from __future__ import annotations
 
 from typing import Final
 
-from ohip_streaming.adapters.postgres.database import Cursor, Session, query, transaction
-from ohip_streaming.application.errors import StoreOperationError
+from ohip_streaming.adapters.postgres.database import Cursor, Session, read, write
 from ohip_streaming.application.ports import PurgeTarget
 
 CUTOFF = "statement_timestamp() - make_interval(days => %(days)s)"
@@ -66,15 +65,9 @@ class PostgresPurgeStore:
             cursor.execute(statement, params)
             return int(cursor.rowcount)
 
-        return await self._session.run(
-            lambda connection: transaction(connection, body, failure=StoreOperationError)
-        )
+        return await write(self._session, body)
 
     async def count_expired(self, target: PurgeTarget, retention_days: int) -> int:
         statement = count_sql(target)
-        rows = await self._session.run(
-            lambda connection: query(
-                connection, statement, {"days": retention_days}, failure=StoreOperationError
-            )
-        )
+        rows = await read(self._session, statement, {"days": retention_days})
         return int(rows[0][0]) if rows else 0

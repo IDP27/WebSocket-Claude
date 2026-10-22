@@ -15,7 +15,7 @@ import re
 from collections.abc import Sequence
 from typing import Any, Final
 
-from ohip_streaming.adapters.postgres.database import Cursor, Session, query, transaction
+from ohip_streaming.adapters.postgres.database import Cursor, Session, read, write
 from ohip_streaming.adapters.postgres.operations_store import EVENT_BY_ID_SQL
 from ohip_streaming.adapters.postgres.rows import (
     ERROR_CLASS_BYTES,
@@ -101,11 +101,7 @@ class PostgresEnrichmentStore:
         self._code_version = code_version
 
     async def get_event(self, raw_event_id: int) -> StoredEvent | None:
-        rows = await self._session.run(
-            lambda connection: query(
-                connection, EVENT_BY_ID_SQL, {"id": raw_event_id}, failure=StoreOperationError
-            )
-        )
+        rows = await read(self._session, EVENT_BY_ID_SQL, {"id": raw_event_id})
         return stored_event_from_row(rows[0]) if rows else None
 
     async def apply(
@@ -126,9 +122,7 @@ class PostgresEnrichmentStore:
                 raise NotFoundError(f"evento bruto {raw_event_id} não encontrado")
             return skipped
 
-        return await self._session.run(
-            lambda connection: transaction(connection, body, failure=StoreOperationError)
-        )
+        return await write(self._session, body)
 
     async def add_dlq(
         self, raw_event_id: int, stage: DlqStage, error_class: str, error: str
@@ -154,6 +148,4 @@ class PostgresEnrichmentStore:
                 {"status": ProcessingStatus.FAILED.value, "raw_event_id": raw_event_id},
             )
 
-        await self._session.run(
-            lambda connection: transaction(connection, body, failure=StoreOperationError)
-        )
+        await write(self._session, body)

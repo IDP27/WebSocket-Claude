@@ -27,9 +27,9 @@ from ohip_streaming.adapters.postgres.database import (
     Session,
     executemany,
     fence,
-    query,
+    read,
     savepoint,
-    transaction,
+    write,
 )
 from ohip_streaming.adapters.postgres.errors import (
     describe,
@@ -49,7 +49,6 @@ from ohip_streaming.adapters.postgres.rows import (
 )
 from ohip_streaming.application.errors import (
     BatchFailedError,
-    StoreOperationError,
     StoreUnavailableError,
     UnknownChainError,
 )
@@ -182,28 +181,17 @@ class PostgresEventStore:
     async def reserve_event_ids(self, count: int) -> list[int]:
         if count <= 0:
             return []
-        rows = await self._session.run(
-            lambda connection: query(
-                connection, RESERVE_IDS_SQL, {"count": count}, failure=StoreOperationError
-            )
-        )
+        rows = await read(self._session, RESERVE_IDS_SQL, {"count": count})
         return sorted(int(row[0]) for row in rows)
 
     async def persist_batch(self, batch: BatchToPersist) -> BatchResult:
-        return await self._session.run(
-            lambda connection: transaction(
-                connection, lambda cursor: self._persist(cursor, batch), failure=BatchFailedError
-            )
+        return await write(
+            self._session, lambda cursor: self._persist(cursor, batch), failure=BatchFailedError
         )
 
     async def pending_consume_retries(self, chain_code: str, limit: int) -> list[ConsumeRetryItem]:
-        rows = await self._session.run(
-            lambda connection: query(
-                connection,
-                PENDING_RETRIES_SQL,
-                {"chain_code": chain_code, "limit": limit},
-                failure=StoreOperationError,
-            )
+        rows = await read(
+            self._session, PENDING_RETRIES_SQL, {"chain_code": chain_code, "limit": limit}
         )
         return [
             ConsumeRetryItem(int(dlq_id), raw or "", from_db_required(created_at))
@@ -222,9 +210,7 @@ class PostgresEventStore:
                 return
             fence(cursor, consumer_lease(row[0]), lease_epoch)
 
-        await self._session.run(
-            lambda connection: transaction(connection, body, failure=StoreOperationError)
-        )
+        await write(self._session, body)
 
     # ------------------------------------------------------------------- lote
 

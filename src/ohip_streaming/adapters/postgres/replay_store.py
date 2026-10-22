@@ -13,12 +13,11 @@ from typing import Any
 
 import psycopg
 
-from ohip_streaming.adapters.postgres.database import Cursor, Session, fence, query, transaction
+from ohip_streaming.adapters.postgres.database import Cursor, Session, fence, read, write
 from ohip_streaming.adapters.postgres.errors import violated_constraint
 from ohip_streaming.adapters.postgres.rows import from_db, from_db_required
 from ohip_streaming.application.errors import (
     ReplayAlreadyPendingError,
-    StoreOperationError,
     UnknownChainError,
 )
 from ohip_streaming.application.ports import ReplayRequest, ReplayStatus
@@ -90,15 +89,17 @@ class PostgresReplayStore:
         self._session = session
 
     async def last_offset(self, chain_code: str) -> Offset | None:
-        rows = await self._query(LAST_OFFSET_SQL, {"chain_code": chain_code})
+        rows = await read(self._session, LAST_OFFSET_SQL, {"chain_code": chain_code})
         if not rows:
             raise UnknownChainError(chain_code)
         value = rows[0][0]
         return Offset(value) if value is not None else None
 
     async def offset_received_at(self, chain_code: str, offset: Offset) -> datetime | None:
-        rows = await self._query(
-            OFFSET_RECEIVED_AT_SQL, {"chain_code": chain_code, "offset_value": offset.value}
+        rows = await read(
+            self._session,
+            OFFSET_RECEIVED_AT_SQL,
+            {"chain_code": chain_code, "offset_value": offset.value},
         )
         return from_db(rows[0][0]) if rows else None
 
@@ -131,12 +132,10 @@ class PostgresReplayStore:
                 created_at=from_db_required(created_at),
             )
 
-        return await self._session.run(
-            lambda connection: transaction(connection, body, failure=StoreOperationError)
-        )
+        return await write(self._session, body)
 
     async def pending_request(self, chain_code: str) -> ReplayRequest | None:
-        rows = await self._query(PENDING_REQUEST_SQL, {"chain_code": chain_code})
+        rows = await read(self._session, PENDING_REQUEST_SQL, {"chain_code": chain_code})
         return _request(rows[0]) if rows else None
 
     async def apply_request(self, request: ReplayRequest, lease_epoch: int) -> bool:
@@ -153,20 +152,11 @@ class PostgresReplayStore:
             fence(cursor, consumer_lease(request.chain_code), lease_epoch)
             return True
 
-        return await self._session.run(
-            lambda connection: transaction(connection, body, failure=StoreOperationError)
-        )
+        return await write(self._session, body)
 
     async def cancel_request(self, request_id: int, cancelled_by: str) -> bool:
         def body(cursor: Cursor) -> bool:
             cursor.execute(CANCEL_REQUEST_SQL, {"id": request_id, "cancelled_by": cancelled_by})
             return cursor.rowcount == 1
 
-        return await self._session.run(
-            lambda connection: transaction(connection, body, failure=StoreOperationError)
-        )
-
-    async def _query(self, statement: str, parameters: dict[str, Any]) -> list[Sequence[Any]]:
-        return await self._session.run(
-            lambda connection: query(connection, statement, parameters, failure=StoreOperationError)
-        )
+        return await write(self._session, body)
