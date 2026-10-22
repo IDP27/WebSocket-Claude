@@ -11,6 +11,7 @@ from collections.abc import Callable
 from datetime import datetime
 
 from ohip_streaming.adapters.postgres.database import Cursor, Session, fence, query, transaction
+from ohip_streaming.adapters.postgres.outbox_chains import OUTBOX_CHAINS_CTE
 from ohip_streaming.adapters.postgres.rows import (
     ERROR_MESSAGE_BYTES,
     from_db_required,
@@ -25,8 +26,17 @@ log = get_logger(__name__)
 
 PUBLISHER_LEASE = "publisher"
 
-CHAINS_WITH_PENDING_SQL = """
-SELECT DISTINCT chain_code FROM ohip_outbox WHERE status = 'PENDING' ORDER BY chain_code"""
+# Por chain, pelo índice ohip_outbox_ix_head: nunca varre o histórico (B2, outbox_chains.py).
+CHAINS_WITH_PENDING_SQL = (
+    OUTBOX_CHAINS_CTE  # noqa: S608 - fragmento fixo deste pacote
+    + """
+SELECT c.chain_code
+  FROM chains c
+ WHERE c.chain_code IS NOT NULL
+   AND EXISTS (SELECT 1 FROM ohip_outbox o
+                WHERE o.chain_code = c.chain_code AND o.status = 'PENDING')
+ ORDER BY c.chain_code"""
+)
 
 FETCH_HEAD_SQL = """
 SELECT id, chain_code, exchange_name, routing_key, unique_event_id, message, schema_version,

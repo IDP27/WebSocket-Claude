@@ -152,6 +152,7 @@ Grupo `POSTGRES_` no lugar de `ORACLE_`:
 - **Mesmos cenários de contrato** de `tests/stores/`, rodando no fake em memória e num PostgreSQL de teste. O marcador `oracle` vira `postgres`.
 - PostgreSQL de teste só com `TEST_POSTGRES_DSN` **e** `TEST_POSTGRES_DISPOSABLE=sim`:
   - os testes só fazem DML nas chains `ZZT*`, com as mesmas guardas de hoje;
+  - os testes de plano (`EXPLAIN`) semeiam linhas `ZZT` (DML) e rodam `ANALYZE` das três tabelas antes, para o planejador decidir com estatísticas; `ANALYZE` é manutenção, não DDL, e num banco onde o papel não é dono vira só um aviso;
   - o schema vem dos scripts de `sql/postgres/`, aplicados pelo alvo `make test-db`. Ele **sobe o próprio contêiner** (`docker run --rm`, nome aleatório, porta só em `127.0.0.1`, senha gerada na hora) e aplica a DDL **somente no DSN que ele mesmo criou**. Nunca aceita um DSN informado, porque `localhost` também pode ser túnel SSH, `port-forward` ou um PostgreSQL de verdade na mesma VM;
   - antes da DDL, o alvo confere que o banco está vazio (nenhuma relação no schema alvo) e aplica com `ON_ERROR_STOP=1 --single-transaction`;
   - no fim, imprime o `TEST_POSTGRES_DSN` para os testes e `make test-db-down` remove o contêiner. É DDL num contêiner descartável criado pelo próprio alvo, nunca em banco existente.
@@ -172,7 +173,7 @@ Grupo `POSTGRES_` no lugar de `ORACLE_`:
 - O expurgo usa `PURGE_CALL_TIMEOUT_MS` como `statement_timeout` do seu pool (`open_pool(..., statement_timeout_ms=...)`); a API usa `API_DB_STATEMENT_TIMEOUT_MS` no pool de cada worker.
 - **Testes:**
   - os 19 cenários de contrato de `tests/stores/` passam no fake e no PostgreSQL 16 do contêiner (`make test-db` + `make test-postgres`);
-  - 21 testes só de banco real (`tests/stores/test_postgres_only.py`): classificação de 9 SQLSTATE e do `statement_timeout`, nenhuma transação aberta depois de leitura ou escrita, os testes 2, 4 e 5 do ADR-0022, as duas corridas reais (retry de DLQ e zumbi na barreira) e o uso de índice no `/status` e no expurgo (`EXPLAIN` com `enable_seqscan = off`);
+  - 21 testes só de banco real (`tests/stores/test_postgres_only.py`): classificação de 9 SQLSTATE e do `statement_timeout`, nenhuma transação aberta depois de leitura ou escrita, os testes 2, 4 e 5 do ADR-0022, as duas corridas reais (retry de DLQ e zumbi na barreira) e o uso de índice na janela do `/status` (`RECENT_EVENTS_SQL`) e no expurgo (`EXPLAIN` com `enable_seqscan = off`; ver a correção B1 abaixo);
   - unitários com driver falso (`tests/fakes/postgres_driver.py`) para sessões, transação, classificação e os dois caminhos do lote, inclusive o teste 3 do ADR-0022.
 - **Carga** (latência medida no contêiner: lote de 200 com p95 de 26 ms no caminho rápido e 202 ms no lento): sustentado a 10× com p95 de 0,27 s (Fase 10, com Oracle simulado: 0,46 s); rajada a ~2 170 eventos/s; no pior caso, com todo lote no caminho lento, p95 de 0,26 s no sustentado e ~660 eventos/s na rajada.
 - No caminho lento, o psycopg registra o aviso `error ignored terminating Pipeline` ao sair do pipeline abortado. É esperado e documentado no RUNBOOK.
@@ -180,6 +181,25 @@ Grupo `POSTGRES_` no lugar de `ORACLE_`:
 - **`ON CONFLICT` do enricher executado antes da Q-1:** um teste cria uma tabela **TEMP** (some com a sessão) e roda o `INSERT ... ON CONFLICT DO UPDATE ... WHERE` contra o banco real. Só roda com `TEST_POSTGRES_LOCAL_CONTAINER=sim`, que só o `make test-db` grava: nunca num banco da empresa.
 - **Inventário `''` × `NULL`** (§4): os opcionais do evento chegam normalizados pelo domínio (vazio → `None`); os opcionais gravados pelo adapter já viram `NULL` quando vazios (`last_close_reason`, `unique_event_id`/`offset_value` da DLQ); os demais textos gravados são obrigatórios. Nenhuma conversão extra foi necessária.
 - **PgBouncer** (Q-18): em modo transação ele recusa as opções de conexão (`TimeZone`, `statement_timeout`) e o preparo automático de comandos do psycopg; se houver, ajustar a conexão antes de ligar.
+
+## Correções do diagnóstico pós-Fase 11 (2026-10-21)
+
+- **B2, varredura completa do outbox (alto).** Três leituras filtravam só `status` (`CHAINS_WITH_PENDING_SQL` do publisher, a cada rodada; `OUTBOX_COUNTS_SQL` e `OLDEST_PENDING_SQL` do `/status` e do `/metrics`). O índice `ohip_outbox_ix_head (chain_code, status, id)` começa por `chain_code`, e o PostgreSQL 15/16 não tem *skip scan* (o Oracle tinha). O resultado era `Seq Scan on ohip_outbox`, proporcional ao histórico retido (90 dias de `SENT`).
+  - **Correção, sem DDL nem mudança de contrato** (`adapters/postgres/outbox_chains.py`): uma CTE recursiva percorre as chains do outbox "pulando" pelo índice (um `min(chain_code)` por chain). Depois, cada leitura consulta `(chain_code, status)` exato. As contagens usam um ramo por status constante (`UNION ALL`), porque com o status vindo de um `VALUES` o planejador volta a varrer a tabela. Não depende do provisionamento em `ohip_offset`.
+  - **Medido no contêiner, com 400 mil linhas (10 `PENDING`) e `VACUUM ANALYZE`:**
+
+    | Leitura | Antes | Depois |
+    | --- | --- | --- |
+    | chains com pendente | 12,9 ms, ~6 600 buffers | 0,50 ms, 18 buffers |
+    | contagens do `/status` | 14,6 ms, ~6 900 buffers | 0,72 ms, 33 buffers |
+    | pendente mais antigo | 11,8 ms, ~6 900 buffers | 0,52 ms, 27 buffers |
+
+    O custo passa a depender do número de chains e das linhas pendentes, não do histórico.
+  - Logo depois do expurgo, as entradas mortas do índice são conferidas no heap uma vez, até o próprio índice marcá-las ou o autovacuum passar. A primeira leitura paga isso; as seguintes, não.
+  - **Testes:**
+    - caracterização `test_pending_outbox_views_across_chains` (fake e banco, verde antes e depois);
+    - `test_pending_outbox_reads_never_scan_the_whole_outbox` (com a varredura sequencial **ligada**, sobre 20 mil linhas semeadas).
+- **B1, teste de índice frágil (médio, só teste).** Os `EXPLAIN` rodavam com as tabelas vazias e sem estatísticas, e num contêiner novo o planejador escolhia outro índice para o expurgo do outbox. Agora o fixture `seeded` semeia 20 mil linhas nas chains `ZZT` (DML) e roda `ANALYZE` antes dos planos. `make test-postgres` passa num contêiner recém-criado.
 
 ## Consequências
 

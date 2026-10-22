@@ -14,6 +14,7 @@ from datetime import datetime
 from typing import Any, TypeVar
 
 from ohip_streaming.adapters.postgres.database import Session, query
+from ohip_streaming.adapters.postgres.outbox_chains import OUTBOX_CHAINS_CTE
 from ohip_streaming.adapters.postgres.rows import (
     from_db,
     from_db_required,
@@ -56,11 +57,28 @@ SELECT s.chain_code, s.state, s.instance_id, s.subscription_id, o.last_offset,
   LEFT JOIN ohip_offset o ON o.chain_code = s.chain_code
  ORDER BY s.chain_code"""
 
-OUTBOX_COUNTS_SQL = """
-SELECT chain_code, status, COUNT(*), MIN(created_at)
-  FROM ohip_outbox
- WHERE status IN ('PENDING', 'FAILED')
- GROUP BY chain_code, status"""
+# Contagens por (chain, status) exatos, pelo índice ohip_outbox_ix_head (B2, outbox_chains.py).
+# Status constante em cada ramo: com o status vindo de um VALUES, o planejador não usa o índice.
+# O ramo FAILED não lê created_at (o _snapshot só usa o mais antigo do PENDING): só o índice.
+OUTBOX_COUNTS_SQL = (
+    OUTBOX_CHAINS_CTE  # noqa: S608 - fragmento fixo deste pacote
+    + """
+SELECT c.chain_code, 'PENDING', p.total, p.oldest
+  FROM chains c
+ CROSS JOIN LATERAL (SELECT COUNT(*) AS total, MIN(o.created_at) AS oldest
+                       FROM ohip_outbox o
+                      WHERE o.chain_code = c.chain_code AND o.status = 'PENDING') p
+ WHERE c.chain_code IS NOT NULL
+   AND p.total > 0
+UNION ALL
+SELECT c.chain_code, 'FAILED', f.total, NULL::timestamptz
+  FROM chains c
+ CROSS JOIN LATERAL (SELECT COUNT(*) AS total
+                       FROM ohip_outbox o
+                      WHERE o.chain_code = c.chain_code AND o.status = 'FAILED') f
+ WHERE c.chain_code IS NOT NULL
+   AND f.total > 0"""
+)
 
 DLQ_OPEN_SQL = """
 SELECT chain_code, stage, COUNT(*)
@@ -112,10 +130,21 @@ SELECT {DLQ_COLUMNS}
  WHERE event_raw_id = %(raw_id)s
  ORDER BY id"""  # noqa: S608 - colunas fixas deste módulo
 
-OLDEST_PENDING_SQL = """
+OLDEST_PENDING_SQL = (
+    OUTBOX_CHAINS_CTE  # noqa: S608 - fragmento fixo deste pacote
+    + """
+SELECT MIN(p.oldest), statement_timestamp()
+  FROM chains c
+ CROSS JOIN LATERAL (SELECT MIN(o.created_at) AS oldest
+                       FROM ohip_outbox o
+                      WHERE o.chain_code = c.chain_code AND o.status = 'PENDING') p
+ WHERE c.chain_code IS NOT NULL"""
+)
+OLDEST_PENDING_CHAIN_SQL = """
 SELECT MIN(created_at), statement_timestamp()
   FROM ohip_outbox
- WHERE status = 'PENDING'"""
+ WHERE chain_code = %(chain_code)s
+   AND status = 'PENDING'"""
 
 REPLAY_BY_ID_SQL = f"""
 SELECT {REPLAY_COLUMNS}
@@ -135,7 +164,7 @@ SELECT {columns}
 
 
 def oldest_pending_sql(chain_code: str | None) -> str:
-    return OLDEST_PENDING_SQL + ("\n   AND chain_code = %(chain_code)s" if chain_code else "")
+    return OLDEST_PENDING_CHAIN_SQL if chain_code else OLDEST_PENDING_SQL
 
 
 def _timestamp(value: datetime) -> datetime | None:

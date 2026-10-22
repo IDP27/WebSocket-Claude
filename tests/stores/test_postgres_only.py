@@ -21,7 +21,12 @@ from tests.stores.test_store_scenarios import CHAIN, batch, event, persist, reco
 from ohip_streaming.adapters.postgres import database as pg_db
 from ohip_streaming.adapters.postgres.database import query, transaction
 from ohip_streaming.adapters.postgres.enrichment_store import PostgresEnrichmentStore
-from ohip_streaming.adapters.postgres.monitoring_store import RECENT_EVENTS_SQL
+from ohip_streaming.adapters.postgres.monitoring_store import (
+    OUTBOX_COUNTS_SQL,
+    RECENT_EVENTS_SQL,
+    oldest_pending_sql,
+)
+from ohip_streaming.adapters.postgres.outbox_store import CHAINS_WITH_PENDING_SQL
 from ohip_streaming.adapters.postgres.purge_store import delete_sql
 from ohip_streaming.application.errors import (
     BatchFailedError,
@@ -249,20 +254,51 @@ async def test_zombie_waiting_on_the_fence_loses_after_the_new_owner_commits(
     assert pg.offset(CHAIN) is None
 
 
-# ------------------------------------------------------------------ índices (11.2)
+# ------------------------------------------------------------------ índices (11.2, B1, B2)
+
+SEED_ROWS = 20_000
+SEED_PENDING_EVERY = 1_000  # 1 linha PENDING a cada 1 000; o resto é SENT (retenção de 90 dias)
+
+_SEED_RAW_SQL = """
+INSERT INTO ohip_event_raw (id, chain_code, offset_value, unique_event_id, module_name,
+                            event_name, primary_key, payload, received_at)
+SELECT nextval('ohip_event_raw_seq'), CASE WHEN g %% 2 = 0 THEN 'ZZT1' ELSE 'ZZT2' END,
+       (1000000 + g)::text, 'zzt-seed-' || g, 'RESERVATION', 'UPDATE RESERVATION', 'pk' || g,
+       '{}', statement_timestamp() - make_interval(days => g %% 120)
+  FROM generate_series(1, %(n)s) AS g"""
+_SEED_OUTBOX_SQL = """
+INSERT INTO ohip_outbox (id, event_raw_id, chain_code, unique_event_id, routing_key, message,
+                         schema_version, status, created_at, sent_at)
+SELECT nextval('ohip_outbox_seq'), r.id, r.chain_code, r.unique_event_id, 'ohip.rsv.X', '{}', 1,
+       CASE WHEN r.id %% %(every)s = 0 THEN 'PENDING' ELSE 'SENT' END, r.received_at,
+       CASE WHEN r.id %% %(every)s = 0 THEN NULL ELSE r.received_at END
+  FROM ohip_event_raw r
+ WHERE r.unique_event_id LIKE 'zzt-seed-%%'"""
 
 
-def _plan(pg: PostgresBackend, statement: str, params: dict[str, Any]) -> str:
-    """Plano com varredura sequencial desligada: prova que o índice **pode** ser usado
-    (com pouco volume o planejador prefere a varredura; volume realista na Q-18)."""
+@pytest.fixture
+def seeded(pg: PostgresBackend) -> PostgresBackend:
+    """Volume com a forma da produção (quase tudo SENT) e estatísticas atualizadas. Sem isso o
+    planejador decide com a tabela vazia e o plano não diz nada (B1). Só DML nas chains ZZT;
+    ``ANALYZE`` não é DDL (num banco onde o papel não é dono, vira só um aviso)."""
+    with pg.pool.connection() as connection:
+        with connection.transaction():
+            connection.execute(_SEED_RAW_SQL, {"n": SEED_ROWS})
+            connection.execute(_SEED_OUTBOX_SQL, {"every": SEED_PENDING_EVERY})
+        connection.execute("ANALYZE ohip_event_raw, ohip_outbox, ohip_dlq")
+    return pg
+
+
+def _plan(pg: PostgresBackend, statement: str, params: dict[str, Any], *, seqscan: bool) -> str:
     with pg.pool.connection() as connection, connection.transaction():
-        connection.execute("SET LOCAL enable_seqscan = off")
+        if not seqscan:  # prova que o índice **pode** ser usado
+            connection.execute("SET LOCAL enable_seqscan = off")
         rows = connection.execute(f"EXPLAIN {statement}", params).fetchall()
     return "\n".join(row[0] for row in rows)
 
 
-def test_status_window_uses_the_received_at_index(pg: PostgresBackend) -> None:
-    plan = _plan(pg, RECENT_EVENTS_SQL, {})
+def test_status_window_uses_the_received_at_index(seeded: PostgresBackend) -> None:
+    plan = _plan(seeded, RECENT_EVENTS_SQL, {}, seqscan=False)
     assert "ohip_event_raw_ix_recv" in plan, plan
 
 
@@ -274,9 +310,32 @@ def test_status_window_uses_the_received_at_index(pg: PostgresBackend) -> None:
         (PurgeTarget.DLQ, "ohip_dlq_ix_open"),
     ],
 )
-def test_purge_uses_the_date_indexes(pg: PostgresBackend, target: PurgeTarget, index: str) -> None:
-    plan = _plan(pg, delete_sql(target), {"days": 90, "n": 1000})
+def test_purge_uses_the_date_indexes(
+    seeded: PostgresBackend, target: PurgeTarget, index: str
+) -> None:
+    plan = _plan(seeded, delete_sql(target), {"days": 90, "n": 1000}, seqscan=False)
     assert index in plan, plan
+
+
+@pytest.mark.parametrize(
+    ("name", "statement", "params"),
+    [
+        ("chains_with_pending", CHAINS_WITH_PENDING_SQL, {}),
+        ("status_outbox_counts", OUTBOX_COUNTS_SQL, {}),
+        ("oldest_pending_global", oldest_pending_sql(None), {}),
+        ("oldest_pending_chain", oldest_pending_sql("ZZT1"), {"chain_code": "ZZT1"}),
+    ],
+    ids=["chains_with_pending", "status_outbox_counts", "oldest_global", "oldest_chain"],
+)
+def test_pending_outbox_reads_never_scan_the_whole_outbox(
+    seeded: PostgresBackend, name: str, statement: str, params: dict[str, Any]
+) -> None:
+    """B2: o publisher (a cada rodada), o ``/status`` e o ``/metrics`` leem o que está pendente.
+    Com o outbox retido (quase tudo SENT), nenhuma dessas leituras pode varrer a tabela: o
+    custo tem de depender das chains e das linhas pendentes, não do histórico. Plano com a
+    varredura sequencial **ligada** (o que o banco escolheria de verdade)."""
+    plan = _plan(seeded, statement, params, seqscan=True)
+    assert "Seq Scan on ohip_outbox" not in plan, f"{name}:\n{plan}"
 
 
 # ------------------------------------------------------------------ enricher (ADR-0022 §5)

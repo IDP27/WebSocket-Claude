@@ -43,7 +43,7 @@ from ohip_streaming.application.use_cases.purge import PurgeExpiredData, PurgeOp
 from ohip_streaming.domain.connection import ConsumerState
 from ohip_streaming.domain.events import Event, parse_next_frame
 from ohip_streaming.domain.masking import MaskingPolicy
-from ohip_streaming.domain.messages import ExchangeKind, build_queue_message
+from ohip_streaming.domain.messages import ExchangeKind, QueueMessage, build_queue_message
 from ohip_streaming.domain.offset import Offset
 
 DLQ_T, OUTBOX_T, FAILED_T, RAW_T = PurgeTarget
@@ -263,6 +263,62 @@ async def test_publisher_marks_and_dlq(backend: Backend) -> None:
     backend.acquire("publisher")  # outro publisher assumiu
     with pytest.raises(LeaseLostError):
         await backend.outbox.mark_sent(head[0].id, epoch)
+
+
+async def test_pending_outbox_views_across_chains(backend: Backend) -> None:
+    """Caracterização (diagnóstico pós-Fase 11, B2): as três leituras de "pendente" do outbox,
+    com uma chain só com PENDING, outra só com FAILED e uma só com reprocessamento."""
+    backend.acquire(f"consumer:{CHAIN}")
+    backend.acquire(f"consumer:{OTHER}")
+    await persist(backend, event(1), event(2), event(3))
+    other = event(1, unique_id=uid(201), chain=OTHER)
+    await backend.events.persist_batch(
+        batch(
+            backend,
+            await records(backend, other),
+            chain_code=OTHER,
+            lease_epoch=backend.epoch(f"consumer:{OTHER}"),
+        )
+    )
+    epoch = backend.acquire("publisher")
+    head = await backend.outbox.fetch_head(CHAIN, 10)
+    await backend.outbox.mark_sent(head[0].id, epoch)  # CHAIN: 1 SENT + 2 PENDING
+    (other_row,) = await backend.outbox.fetch_head(OTHER, 10)
+    await backend.outbox.mark_failed(other_row.id, 10, "esgotado", epoch)  # OTHER: só FAILED
+
+    assert await backend.outbox.chains_with_pending() == [CHAIN]
+    snapshot = await backend.monitoring.status()
+    counts = {c.chain_code: c.outbox for c in snapshot.chains if c.chain_code in (CHAIN, OTHER)}
+    assert (counts[CHAIN].pending, counts[CHAIN].failed) == (2, 0)
+    assert counts[CHAIN].oldest_pending_at is not None
+    assert (counts[OTHER].pending, counts[OTHER].failed, counts[OTHER].oldest_pending_at) == (
+        0,
+        1,
+        None,
+    )
+    assert await backend.monitoring.oldest_pending_age_s(None) is not None
+    assert await backend.monitoring.oldest_pending_age_s(OTHER) is None
+
+    # OTHER passa a ter só um reprocessamento pendente (exchange ohip.reprocess).
+    stored = await backend.operations.find_event(other.unique_event_id)
+    assert stored is not None
+    await backend.operations.enqueue(
+        chain_code=OTHER,
+        raw_event_id=stored.raw_event_id,
+        message=QueueMessage(ExchangeKind.REPROCESS, "ohip.rsv.X", f"re-{uid(201)}", "{}"),
+        exchange_name="ohip.reprocess",
+    )
+    assert await backend.outbox.chains_with_pending() == [CHAIN, OTHER]
+    assert await backend.monitoring.oldest_pending_age_s(OTHER) is not None
+
+    for chain in (CHAIN, OTHER):  # tudo publicado: nada pendente em lugar nenhum
+        for row in await backend.outbox.fetch_head(chain, 10):
+            await backend.outbox.mark_sent(row.id, epoch)
+    assert await backend.outbox.chains_with_pending() == []
+    assert await backend.monitoring.oldest_pending_age_s(None) is None
+    snapshot = await backend.monitoring.status()
+    counts = {c.chain_code: c.outbox for c in snapshot.chains if c.chain_code in (CHAIN, OTHER)}
+    assert [(counts[c].pending, counts[c].failed) for c in (CHAIN, OTHER)] == [(0, 0), (0, 1)]
 
 
 async def test_dlq_retries_are_atomic(backend: Backend) -> None:
