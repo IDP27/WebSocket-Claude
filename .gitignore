@@ -23,6 +23,10 @@ postman/*.local.json
 .test-db
 .test-db.env
 
+# PDFs gerados para envio (pendências, rastreabilidade): ficam fora do git
+docs/pendencias/*.pdf
+faseatual.pdf
+
 # Diversos
 .DS_Store
 *.log
