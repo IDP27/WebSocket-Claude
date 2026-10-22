@@ -147,6 +147,14 @@ def test_extra_elements_from_configuration() -> None:
     assert masked.items[1].new_value == MASK  # os padrões continuam valendo
 
 
+def test_extra_elements_win_over_the_profile_safe_list() -> None:
+    """Pedido explícito do operador (MASK_EXTRA_ELEMENTS) vale também no PROFILE."""
+    policy = MaskingPolicy.with_extra_elements(["VIP STATUS"])
+    assert policy.is_sensitive("VIP STATUS", "PROFILE")
+    assert policy.is_sensitive("VIP STATUS", "RESERVATION")
+    assert not policy.is_sensitive("NAME TYPE", "PROFILE")  # o resto da lista segura continua
+
+
 def test_scrub_card_numbers_in_event_rewrites_detail_and_payload_only() -> None:
     raw_event = new_event(
         "4111111111111111",  # offset com 16 dígitos que passa no Luhn: não é tocado

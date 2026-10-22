@@ -277,11 +277,14 @@ class DedicatedSession:
         _drop(self._pool, connection)
 
     def close(self) -> None:
+        """Chame depois de o consumer parar. Com o executor próprio, espera a gravação em
+        curso (limitada pelo ``statement_timeout``) e cancela a fila antes de devolver a
+        conexão: o pool nunca recebe uma conexão em uso."""
+        if self._owns_executor:
+            self._executor.shutdown(wait=True, cancel_futures=True)
         if self._connection is not None:
             connection, self._connection = self._connection, None
             self._pool.putconn(connection)
-        if self._owns_executor:
-            self._executor.shutdown(wait=False)
 
 
 class PooledSession:

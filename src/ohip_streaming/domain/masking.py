@@ -377,10 +377,10 @@ class MaskingPolicy:
 
     def is_sensitive(self, element_name: str, module_name: str) -> bool:
         name = normalize_event_name(element_name)
+        if name in self.extra_personal_elements:  # pedido do operador vence a lista segura
+            return True
         if normalize_event_name(module_name) in self.deny_by_default_modules:
             return name not in self.profile_safe_elements
-        if name in self.extra_personal_elements:
-            return True
         return any(pattern.fullmatch(name) for pattern in _PERSONAL_PATTERNS)
 
     def mask_detail(self, detail: Iterable[EventDetail], module_name: str) -> MaskedDetail:

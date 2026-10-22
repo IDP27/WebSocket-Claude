@@ -233,7 +233,7 @@ _PG_CLEANUP = (
     "DELETE FROM ohip_replay_request WHERE chain_code = %(chain)s",
     "DELETE FROM ohip_offset WHERE chain_code = %(chain)s",
     "DELETE FROM ohip_consumer_status WHERE chain_code = %(chain)s",
-    "DELETE FROM ohip_lease WHERE lease_name = 'consumer:' || %(chain)s",
+    f"DELETE FROM ohip_lease WHERE lease_name = '{consumer_lease('')}' || %(chain)s",  # noqa: S608
 )
 _PG_SEED = (
     "INSERT INTO ohip_lease (lease_name, epoch, expires_at)"  # noqa: S608 - prefixo do domínio

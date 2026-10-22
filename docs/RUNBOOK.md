@@ -28,7 +28,7 @@
 
    | Arquivo | Usado por | Conteúdo |
    | --- | --- | --- |
-   | `common.env` | consumer, publisher, enricher, API | `APP_*`, `LOG_*`, `POSTGRES_*` (papel `ohip_app`), `REDIS_*`, `RABBITMQ_*`, `MASK_*` (máscara LGPD extra, Q-9) |
+   | `common.env` | consumer, publisher, enricher, API | `APP_*`, `LOG_*`, `POSTGRES_*` (papel `ohip_app`), `REDIS_*`, `RABBITMQ_*`, `MASK_*` (máscara LGPD extra, Q-9; vale também no PROFILE, por cima da lista segura. Consumer e API precisam do mesmo valor; mudar não reescreve mensagens já no outbox, só as próximas e os reprocessamentos) |
    | `consumer-<CHAIN>.env` | `ohip-consumer@<CHAIN>` | `OHIP_*` da app da chain, `CONSUMER_*`, `LEASE_*` (a chain vem do nome da instância) |
    | `publisher.env`, `enricher.env` | publisher, enricher (opcionais) | `PUBLISHER_*`, `ENRICHER_*` (e `OHIP_*` se `ENRICHER_REST_ENABLED=true`) |
    | `api.env` | `ohip-api` | `API_*` |

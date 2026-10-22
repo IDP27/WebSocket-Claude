@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
@@ -257,3 +259,28 @@ async def test_dedicated_session_closes_only_its_own_executor() -> None:
         await borrowed.run(lambda c: c)
         borrowed.close()
         assert shared.submit(lambda: 1).result() == 1  # o de fora continua de quem o criou
+
+
+async def test_dedicated_session_returns_the_connection_only_after_the_write_ends() -> None:
+    """Revisão do passo 13: ``close()`` com uma gravação ainda no thread não devolve ao pool
+    uma conexão em uso; o que ainda estava na fila é cancelado."""
+    pool = FakePool()
+    session = db.DedicatedSession(pool)
+    started, release = threading.Event(), threading.Event()
+    seen: list[bool] = []
+
+    def slow(connection: Any) -> None:
+        started.set()
+        release.wait(5)
+        seen.append(connection in pool.returned)
+
+    writing = asyncio.ensure_future(session.run(slow))
+    queued = asyncio.ensure_future(session.run(lambda c: c))
+    await asyncio.to_thread(started.wait, 5)
+    threading.Timer(0.2, release.set).start()
+    session.close()
+    await writing
+    with pytest.raises(asyncio.CancelledError):
+        await queued
+    assert seen == [False]  # durante a gravação a conexão ainda era da sessão
+    assert len(pool.returned) == 1

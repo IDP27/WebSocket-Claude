@@ -10,7 +10,7 @@
 | Onde ele roda: Aviva, serviço gerenciado (qual) ou outro? | TLS, rede, backup, limites de conexão |
 | Quem é o **DBA responsável**? | Aplicação da DDL, papéis, planos de execução |
 | O certificado TLS do servidor é de uma CA do sistema ou de uma CA interna? | `POSTGRES_SSLMODE=verify-full` e, se interna, `POSTGRES_SSLROOTCERT` |
-| Há limite de conexões por papel, `idle_in_transaction_session_timeout`, `statement_timeout` de servidor ou pooler (PgBouncer) na frente? | O pool de cada processo (`POSTGRES_POOL_MAX`) e os prazos precisam caber nesses limites. Um PgBouncer em modo transação recusa as opções de conexão que o projeto envia (`TimeZone`, `statement_timeout`) e o preparo automático de comandos do psycopg: nesse caso, ajustamos a conexão antes de ligar |
+| Há limite de conexões por papel, `idle_in_transaction_session_timeout`, `statement_timeout` de servidor ou pooler (PgBouncer) na frente? | O pool de cada processo (`POSTGRES_POOL_MAX`) e os prazos precisam caber nesses limites. Um PgBouncer em modo transação recusa as opções de conexão que o projeto envia (`TimeZone`, `statement_timeout`) e o preparo automático de comandos do psycopg: nesse caso, ajustamos a conexão antes de ligar. Para os testes (`make test-postgres`), pedimos conexão direta ou PgBouncer em modo sessão: a suíte serializa execuções com um advisory lock de sessão |
 
 ## 2. O que pedimos
 
