@@ -18,7 +18,8 @@ Nada abaixo depende de código novo: cada item espera uma resposta ou um ambient
 | **Q-17/Q-18**: PostgreSQL de teste com a versão de produção; versão, hospedagem e DBA do PostgreSQL | Infraestrutura e DBA | Repetir no banco da empresa os testes que já passam no contêiner local (`make test-db`), planos de execução, expurgo e carga com banco real (Fase 10) | [Q-17-pedido-ao-dba.md](docs/pendencias/Q-17-pedido-ao-dba.md) |
 | **Sandbox OHIP**: streaming habilitado, app de desenvolvimento e eventos aprovados | Oracle (workshop B93152 ou SR) e dono do ambiente | Validação do consumer (Fase 5) e dos pontos D da documentação | [sandbox-ohip.md](docs/pendencias/sandbox-ohip.md) |
 | **RabbitMQ e Redis de teste da empresa** | Infraestrutura | Repetir os testes de integração no ambiente da empresa. Já passaram em contêineres locais (Redis 7 e RabbitMQ 3, 12 de 12) | [RUNBOOK](docs/RUNBOOK.md) |
-| **Q-5, Q-6, Q-7, Q-8**: login do painel, VMs, ferramenta de alertas, pico de eventos | Projeto e infraestrutura | Ajuste dos padrões de deploy; limites `# AJUSTAR` em [ohip-alerts.yml](deploy/prometheus/ohip-alerts.yml); teste de carga com o número real | [OPEN_QUESTIONS](docs/OPEN_QUESTIONS.md) |
+| **Q-5**: login do painel pelo Microsoft Entra ID (decidido); falta a infraestrutura definir como ele chega ao Nginx, o App Registration e os perfis | Infraestrutura | Trocar o `auth_basic` de exemplo pelo Entra no Nginx (só configuração, ADR-0018) | [Q-5-login-entra-infraestrutura.pdf](docs/pendencias/) (fora do git) |
+| **Q-6, Q-7, Q-8**: VMs, ferramenta de alertas, pico de eventos | Projeto e infraestrutura | Ajuste dos padrões de deploy; limites `# AJUSTAR` em [ohip-alerts.yml](deploy/prometheus/ohip-alerts.yml); teste de carga com o número real | [OPEN_QUESTIONS](docs/OPEN_QUESTIONS.md) |
 
 ## Ambiente de desenvolvimento
 

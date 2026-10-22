@@ -36,4 +36,5 @@ O painel foi desenhado na Fase 0 (docs/UI.md) e só fala com a API (ADR-0004). A
 
 - Variáveis novas `ADMIN_*` no `.env.example`; o teste do `.env.example` passa a ler também as classes de configuração do painel.
 - A Q-5 continua aberta: trocar o login (LDAP, SSO com outros headers) muda só a configuração dos headers e o Nginx (Fase 10).
+  - **Nota (2026-10-22):** provedor decidido, **Microsoft Entra ID**. O desenho deste ADR não muda: quem fala com o Entra (proxy corporativo ou oauth2-proxy) preenche os headers de usuário e grupos, e os perfis viram App Roles ou grupos mapeados para `ADMIN_ADMIN_GROUP`/`ADMIN_READ_GROUP`. A claim do usuário precisa ser ASCII com até 100 caracteres (UPN ou e-mail).
 - O painel depende da API: API fora → páginas 503 (aceito no ADR-0004).
