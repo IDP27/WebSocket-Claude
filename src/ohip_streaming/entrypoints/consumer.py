@@ -48,6 +48,7 @@ from ohip_streaming.config import (
     AppSettings,
     ConsumerSettings,
     LeaseSettings,
+    MaskingSettings,
     OhipSettings,
     PostgresSettings,
     RabbitMQSettings,
@@ -57,7 +58,12 @@ from ohip_streaming.config import (
 from ohip_streaming.domain.connection import ReconnectPolicy
 from ohip_streaming.domain.leases import consumer_lease
 from ohip_streaming.domain.messages import ExchangeKind
-from ohip_streaming.entrypoints.common import AlertCounter, instance_id, preregister
+from ohip_streaming.entrypoints.common import (
+    AlertCounter,
+    instance_id,
+    masking_policy,
+    preregister,
+)
 from ohip_streaming.entrypoints.runtime import metrics_snapshots, setup_logging, stop_on_signals
 from ohip_streaming.logging import get_logger
 
@@ -75,6 +81,7 @@ class ConsumerConfig:
     consumer: ConsumerSettings
     lease: LeaseSettings
     rabbitmq: RabbitMQSettings
+    masking: MaskingSettings
 
     @classmethod
     def load(cls) -> ConsumerConfig:
@@ -86,6 +93,7 @@ class ConsumerConfig:
             consumer=load_settings(ConsumerSettings),
             lease=load_settings(LeaseSettings),
             rabbitmq=load_settings(RabbitMQSettings),
+            masking=load_settings(MaskingSettings),
         )
 
 
@@ -167,6 +175,7 @@ async def compose(config: ConsumerConfig) -> AsyncIterator[ChainConsumer]:
             allowlist=frozenset(o.event_allowlist),
             module_codes=o.module_codes,
             max_retries=config.consumer.batch_max_retries,
+            masking=masking_policy(config.masking),
         )
         tokens = TokenProvider(
             issuer=OhipTokenIssuer(http, credentials_from_settings(o), clock),

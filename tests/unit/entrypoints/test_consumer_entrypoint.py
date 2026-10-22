@@ -11,6 +11,7 @@ from tests.unit.test_config import OHIP_MIN_ENV, set_env
 
 from ohip_streaming.application.use_cases.consume_chain import ChainConsumer
 from ohip_streaming.config import load_settings
+from ohip_streaming.domain.masking import MaskingPolicy
 from ohip_streaming.domain.messages import ExchangeKind
 from ohip_streaming.entrypoints import consumer as entry
 from ohip_streaming.entrypoints.common import instance_id
@@ -86,5 +87,29 @@ async def test_compose_builds_and_closes_everything(
         # Caracterização (refatoração 10): o nome que o LeaseKeeper disputa é o mesmo da
         # barreira de epoch do adapter (test_pg_event_store: "consumer:<chain>").
         assert deps.lease._name == "consumer:CHAIN1"
+        # Caracterização (refatoração 11): sem lista extra, a máscara padrão da Q-9 na fila.
+        assert deps.batch._options.masking == MaskingPolicy()
+        assert deps.retry_dlq._options.masking == MaskingPolicy()
     assert closed == ["redis", "postgres"]
     assert ("ohip_lease_lost_total", {"lease": "consumer:CHAIN1"}) in entry.alert_counters("CHAIN1")
+
+
+async def test_extra_masked_elements_reach_the_queue_message(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """MASK_EXTRA_ELEMENTS (Q-9) chega à máscara da fila e do retry de DLQ."""
+    set_env(monkeypatch, **ENV, MASK_EXTRA_ELEMENTS="room number")
+    load_settings.cache_clear()
+    config = entry.ConsumerConfig.load()
+    monkeypatch.setattr(entry, "open_pool", lambda settings, **kw: FakePool())
+
+    class ClosingRedis(FakeRedis):
+        async def aclose(self) -> None:
+            return None
+
+    monkeypatch.setattr(entry, "open_redis", lambda settings: ClosingRedis())
+    async with entry.compose(config) as consumer:
+        deps: Any = consumer._deps
+        for policy in (deps.batch._options.masking, deps.retry_dlq._options.masking):
+            assert policy.is_sensitive("ROOM NUMBER", "RESERVATION")
+            assert not policy.is_sensitive("ARRIVAL DATE", "RESERVATION")

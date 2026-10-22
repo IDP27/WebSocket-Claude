@@ -20,6 +20,7 @@ from tests.fakes.redis_sync import FakeSyncRedis
 
 from ohip_streaming.adapters.postgres import monitoring_store as sql
 from ohip_streaming.application.errors import BrokerUnavailableError
+from ohip_streaming.domain.masking import MaskingPolicy
 from ohip_streaming.entrypoints.api import app as app_module
 from ohip_streaming.entrypoints.api import server
 from ohip_streaming.entrypoints.api.app import ApiConfig, build_app, compose, create_app
@@ -63,6 +64,11 @@ def test_compose_wires_postgres_redis_and_broker(monkeypatch: pytest.MonkeyPatch
     pool = FakePool()
     services = compose(ApiConfig.load(), pool, FakeSyncRedis())
     assert services.tokens == {token_hash(TOKEN): Role.ADMIN}
+    # Caracterização (refatoração 11): sem lista extra, a máscara padrão na API e no
+    # reprocessamento.
+    assert services.monitoring._masking == MaskingPolicy()
+    assert services.reprocess._options.masking == MaskingPolicy()
+    assert services.retry_dlq._options.masking == MaskingPolicy()
 
     client = TestClient(build_app(services))
     ready = client.get("/ready")
@@ -219,3 +225,15 @@ def test_status_local_copy_covers_redis_down() -> None:
     assert service.payload() == b'{"n":1}'  # cópia local, sem Redis
     now[0] = 5.0
     assert service.payload() == b'{"n":2}'  # venceu
+
+
+def test_extra_masked_elements_reach_queries_and_reprocess(monkeypatch: pytest.MonkeyPatch) -> None:
+    """MASK_EXTRA_ELEMENTS (Q-9) vale nas consultas, no export e no reprocessamento."""
+    monkeypatch.setenv("MASK_EXTRA_ELEMENTS", "ROOM NUMBER")
+    services = compose(ApiConfig.load(), FakePool(), FakeSyncRedis())
+    for policy in (
+        services.monitoring._masking,
+        services.reprocess._options.masking,
+        services.retry_dlq._options.masking,
+    ):
+        assert policy.is_sensitive("room number", "RESERVATION")

@@ -449,6 +449,21 @@ class PurgeSettings(BaseSettings):
     dry_run: bool = True
 
 
+class MaskingSettings(BaseSettings):
+    """Máscara LGPD (RNF-08, Q-9, ARCHITECTURE §11): ``elementName`` extras a mascarar, além dos
+    padrões de dado pessoal do domínio. Vale na fila (consumer), na API (consultas e export) e
+    no reprocessamento; vazio = só os padrões. Nomes comparados sem diferenciar maiúsculas."""
+
+    model_config = _config("MASK_")
+
+    extra_elements: Annotated[list[str], NoDecode] = Field(default_factory=list)
+
+    @field_validator("extra_elements", mode="before")
+    @classmethod
+    def _split(cls, value: object) -> object:
+        return _split_csv(value)
+
+
 class LogSettings(BaseSettings):
     model_config = _config("LOG_")
 

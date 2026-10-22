@@ -34,13 +34,13 @@ from ohip_streaming.config import (
     AppSettings,
     Environment,
     LogSettings,
+    MaskingSettings,
     OhipRoutingSettings,
     PostgresSettings,
     RabbitMQSettings,
     RedisSettings,
     load_settings,
 )
-from ohip_streaming.domain.masking import MaskingPolicy
 from ohip_streaming.domain.messages import ExchangeKind
 from ohip_streaming.entrypoints.api.errors import RequestContextMiddleware, install_error_handlers
 from ohip_streaming.entrypoints.api.routes import api, internal
@@ -54,6 +54,7 @@ from ohip_streaming.entrypoints.api.services import (
     TtlCache,
     status_payload,
 )
+from ohip_streaming.entrypoints.common import masking_policy
 from ohip_streaming.logging import configure_logging, get_logger
 
 log = get_logger(__name__)
@@ -98,6 +99,7 @@ class ApiConfig:
     redis: RedisSettings
     rabbitmq: RabbitMQSettings
     routing: OhipRoutingSettings
+    masking: MaskingSettings
 
     @classmethod
     def load(cls) -> ApiConfig:
@@ -108,6 +110,7 @@ class ApiConfig:
             redis=load_settings(RedisSettings),
             rabbitmq=load_settings(RabbitMQSettings),
             routing=load_settings(OhipRoutingSettings),
+            masking=load_settings(MaskingSettings),
         )
 
 
@@ -125,10 +128,11 @@ def open_api_pool(config: ApiConfig) -> Pool:
 def compose(config: ApiConfig, pool: Pool, redis: Any) -> ApiServices:
     """Serviços do worker sobre o pool do banco e o Redis síncrono. O pool já vem com o prazo
     próprio da API (``API_DB_STATEMENT_TIMEOUT_MS``, ``open_api_pool``)."""
+    masking = masking_policy(config.masking)  # LGPD (Q-9): igual à fila
     session = InlineSession(PooledSession(pool))
     module_codes = config.routing.module_codes
     monitoring = Monitoring(
-        store=PostgresMonitoringStore(session), masking=MaskingPolicy(), module_codes=module_codes
+        store=PostgresMonitoringStore(session), masking=masking, module_codes=module_codes
     )
     messaging = MessagingOptions(
         exchange_names={
@@ -136,6 +140,7 @@ def compose(config: ApiConfig, pool: Pool, redis: Any) -> ApiServices:
             ExchangeKind.REPROCESS: config.rabbitmq.reprocess_exchange,
         },
         module_codes=module_codes,
+        masking=masking,
     )
     operations = PostgresOperationsStore(session)
     replays = PostgresReplayStore(session)

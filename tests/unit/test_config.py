@@ -19,6 +19,7 @@ from ohip_streaming.config import (
     Environment,
     LeaseSettings,
     LogSettings,
+    MaskingSettings,
     OhipSettings,
     PostgresSettings,
     RabbitMQSettings,
@@ -195,6 +196,12 @@ def test_app_settings_defaults() -> None:
     settings = AppSettings()
     assert settings.environment is Environment.DESENVOLVIMENTO
     assert settings.code_version == "dev"
+
+
+def test_masking_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert MaskingSettings().extra_elements == []
+    monkeypatch.setenv("MASK_EXTRA_ELEMENTS", " room number, ,VIP STATUS ")
+    assert MaskingSettings().extra_elements == ["room number", "VIP STATUS"]
 
 
 def test_postgres_settings(monkeypatch: pytest.MonkeyPatch) -> None:
