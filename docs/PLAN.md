@@ -16,7 +16,7 @@
 | 8. Painel Flask ✅ aprovada (login no Nginx a definir, Q-5) | Páginas, componentes, HTMX, cliente da API | M | 7 | Q-5 |
 | 9. Enricher ✅ aprovada (esqueleto; regras após a Q-1) | Esqueleto com cache, rate limit, `MERGE`; regras por evento após Q-1 | M (esqueleto) / G (regras) | 6 | Q-1, Q-2, assinatura das APIs REST |
 | 10. Endurecimento ✅ aprovada (ADR-0020; carga medida com Oracle simulado, Oracle real na Q-17) | Teste de carga 10× (Otimizador), `/entender` geral, systemd, Nginx, expurgo, RUNBOOK, README; consumer gravando `subscription_id`, `last_message_at`, reconexões, `token_expires_at` e ping/pong em `OHIP_CONSUMER_STATUS` (pendência do status da API, ADR-0017) | G | 5–9 | Q-6, Q-7, Q-8 |
-| 11. PostgreSQL (em revisão: Engenheiro concluído) | Troca do Oracle 11g pelo PostgreSQL (DV-15, ADR-0021/0022): adapter novo com os mesmos ports e cenários, DDL em `sql/postgres/`, remoção do Oracle | G | 3–10 | Q-18 (versão, hospedagem, DBA) |
+| 11. PostgreSQL ✅ aprovada (validação no banco da empresa pendente, Q-17/Q-18) | Troca do Oracle 11g pelo PostgreSQL (DV-15, ADR-0021/0022): adapter novo com os mesmos ports e cenários, DDL em `sql/postgres/`, remoção do Oracle | G | 3–10 | Q-18 (versão, hospedagem, DBA) |
 
 ## Refatorações do diagnóstico `/entender` (pós-Fase 10)
 
@@ -45,7 +45,7 @@ Nada aqui cria regra de evento nem tabela de domínio (CLAUDE.md). Só deixa pro
 
 ## Fase 11 — Troca do Oracle 11g pelo PostgreSQL (DV-15, ADR-0021, ADR-0022)
 
-Decisão do tech lead em 2026-10-21. Padrões até a Q-18: PostgreSQL 15+ (testado em 16), acesso síncrono, saída total do Oracle, nada a migrar. Contratos de fila, API e tabelas **não mudam** (mesmas colunas e nomes; só os tipos). Estado: **Arquiteto aprovado (commit `9334f13`); Engenheiro concluído, em revisão.**
+Decisão do tech lead em 2026-10-21. Padrões até a Q-18: PostgreSQL 15+ (testado em 16), acesso síncrono, saída total do Oracle, nada a migrar. Contratos de fila, API e tabelas **não mudam** (mesmas colunas e nomes; só os tipos). Estado: **✅ aprovada** (Arquiteto `9334f13`, Engenheiro `522366d`). Falta repetir os testes no PostgreSQL da empresa (Q-17/Q-18).
 
 Tarefas do Engenheiro, nesta ordem, cada uma com `make check` verde:
 
