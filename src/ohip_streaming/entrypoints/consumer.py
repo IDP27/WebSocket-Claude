@@ -55,6 +55,7 @@ from ohip_streaming.config import (
     load_settings,
 )
 from ohip_streaming.domain.connection import ReconnectPolicy
+from ohip_streaming.domain.leases import consumer_lease
 from ohip_streaming.domain.messages import ExchangeKind
 from ohip_streaming.entrypoints.common import AlertCounter, instance_id, preregister
 from ohip_streaming.entrypoints.runtime import metrics_snapshots, setup_logging, stop_on_signals
@@ -133,7 +134,7 @@ def alert_counters(chain_code: str) -> list[AlertCounter]:
         ("ohip_connection_poisoned_total", chain),
         ("ohip_card_data_detected_total", chain),
         ("ohip_ws_reconnects_total", {"code": "4409", **chain}),
-        ("ohip_lease_lost_total", {"lease": f"consumer:{chain_code}"}),
+        ("ohip_lease_lost_total", {"lease": consumer_lease(chain_code)}),
     ]
 
 
@@ -179,7 +180,7 @@ async def compose(config: ConsumerConfig) -> AsyncIterator[ChainConsumer]:
             store=PostgresLeaseStore(control),
             clock=clock,
             metrics=metrics,
-            lease_name=f"consumer:{o.chain_code}",
+            lease_name=consumer_lease(o.chain_code),
             owner=instance,
             options=LeaseOptions(
                 ttl_s=config.lease.ttl_s,

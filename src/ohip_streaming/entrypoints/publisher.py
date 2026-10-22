@@ -38,13 +38,12 @@ from ohip_streaming.config import (
     RedisSettings,
     load_settings,
 )
+from ohip_streaming.domain.leases import PUBLISHER_LEASE
 from ohip_streaming.entrypoints.common import AlertCounter, instance_id, preregister
 from ohip_streaming.entrypoints.runtime import metrics_snapshots, setup_logging, stop_on_signals
 from ohip_streaming.logging import get_logger
 
 log = get_logger(__name__)
-
-LEASE_NAME = "publisher"
 
 
 @dataclass(frozen=True)
@@ -115,7 +114,7 @@ async def compose(config: PublisherConfig) -> AsyncIterator[PublisherService]:
                 store=PostgresLeaseStore(session),
                 clock=clock,
                 metrics=metrics,
-                lease_name=LEASE_NAME,
+                lease_name=PUBLISHER_LEASE,
                 owner=instance,
                 options=LeaseOptions(
                     ttl_s=config.lease.ttl_s,
@@ -140,7 +139,7 @@ async def compose(config: PublisherConfig) -> AsyncIterator[PublisherService]:
 
 def alert_counters() -> list[AlertCounter]:
     """Contadores do publisher citados em deploy/prometheus/ohip-alerts.yml."""
-    return [("ohip_lease_lost_total", {"lease": LEASE_NAME})]
+    return [("ohip_lease_lost_total", {"lease": PUBLISHER_LEASE})]
 
 
 async def serve(config: PublisherConfig) -> None:

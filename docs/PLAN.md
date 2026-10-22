@@ -38,7 +38,7 @@ Uma por vez, cada uma com testes de caracterização escritos antes, revisão e 
 | --- | --- | --- |
 | 8 | B1 (`/depurar`): testes de índice com dados semeados e `ANALYZE` (passavam por acaso; falhavam num contêiner novo) | ✅ aprovada |
 | 9 | B2 (`/depurar`): leituras de pendente do outbox por chain, sem varredura completa (`outbox_chains.py`; 12–15 ms → 0,5–0,7 ms com 400 mil linhas) | ✅ aprovada |
-| 10 | Nome do lease numa fonte só (barreira do adapter = `LeaseKeeper` dos entrypoints) | proposto |
+| 10 | Nome do lease numa fonte só (`domain/leases.py`: barreira dos adapters = `LeaseKeeper` e alertas dos entrypoints; `replay_store` não importa mais o `event_store`) | em revisão |
 | 11 | Lista de máscara LGPD configurável (Q-9, ARCHITECTURE §11) | proposto |
 | 12 | Stores sem wrappers duplicados (`_read`/`_write` comuns) | proposto |
 | 13 | Limpezas: validador `module_codes` único, `UQ_EVT` morta, `shutdown()` dos executores, docs (`MERGE`/ORA) | proposto |

@@ -60,6 +60,7 @@ from ohip_streaming.application.ports import (
     NewEventRecord,
     RowFailure,
 )
+from ohip_streaming.domain.leases import consumer_lease
 from ohip_streaming.domain.messages import ExchangeKind
 from ohip_streaming.logging import get_logger
 
@@ -143,10 +144,6 @@ REJECTED_ERROR_CLASS = "REJECTED"  # mensagem recusada pelo domínio (não virou
 RETRY_RESOLVER = "consumer"
 
 _Classified = tuple[list[str], list[str], list[RowFailure]]
-
-
-def consumer_lease(chain_code: str) -> str:
-    return f"consumer:{chain_code}"
 
 
 def encodes_cleanly(row: Mapping[str, Any]) -> bool:

@@ -20,11 +20,10 @@ from ohip_streaming.adapters.postgres.rows import (
 )
 from ohip_streaming.application.errors import StoreOperationError
 from ohip_streaming.application.ports import OutboxRow
+from ohip_streaming.domain.leases import PUBLISHER_LEASE
 from ohip_streaming.logging import get_logger
 
 log = get_logger(__name__)
-
-PUBLISHER_LEASE = "publisher"
 
 # Por chain, pelo índice ohip_outbox_ix_head: nunca varre o histórico (B2, outbox_chains.py).
 CHAINS_WITH_PENDING_SQL = (

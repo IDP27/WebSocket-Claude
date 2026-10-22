@@ -83,4 +83,8 @@ async def test_compose_builds_and_closes_everything(
         assert deps.app_key == "app-key-secreta"
         assert "app-key-secreta" not in repr(deps)  # segredo fora do repr
         assert deps.lease._options.ttl_s == 40
+        # Caracterização (refatoração 10): o nome que o LeaseKeeper disputa é o mesmo da
+        # barreira de epoch do adapter (test_pg_event_store: "consumer:<chain>").
+        assert deps.lease._name == "consumer:CHAIN1"
     assert closed == ["redis", "postgres"]
+    assert ("ohip_lease_lost_total", {"lease": "consumer:CHAIN1"}) in entry.alert_counters("CHAIN1")

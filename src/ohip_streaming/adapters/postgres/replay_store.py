@@ -15,7 +15,6 @@ import psycopg
 
 from ohip_streaming.adapters.postgres.database import Cursor, Session, fence, query, transaction
 from ohip_streaming.adapters.postgres.errors import violated_constraint
-from ohip_streaming.adapters.postgres.event_store import consumer_lease
 from ohip_streaming.adapters.postgres.rows import from_db, from_db_required
 from ohip_streaming.application.errors import (
     ReplayAlreadyPendingError,
@@ -23,6 +22,7 @@ from ohip_streaming.application.errors import (
     UnknownChainError,
 )
 from ohip_streaming.application.ports import ReplayRequest, ReplayStatus
+from ohip_streaming.domain.leases import consumer_lease
 from ohip_streaming.domain.offset import Offset
 
 PENDING_INDEX = "ohip_replay_ux_pending"
